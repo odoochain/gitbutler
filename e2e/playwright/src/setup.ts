@@ -1,8 +1,8 @@
 import { setConfig } from "./config.ts";
 import { BUT, BUT_SERVER, BUT_SERVER_PORT, DESKTOP_PORT, GIT_CONFIG_GLOBAL } from "./env.ts";
 import { serverLogSink } from "./serverLog.ts";
-import { waitForTestId } from "./util.ts";
-import { type BrowserContext, type Page } from "@playwright/test";
+import { clickByTestId, waitForTestId } from "./util.ts";
+import { expect, type BrowserContext, type Page } from "@playwright/test";
 import { ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { Socket } from "node:net";
@@ -18,11 +18,36 @@ export async function applyUpstream(gitbutler: GitButler, ...branches: string[])
 }
 
 /**
+ * Add a new commit directly to a branch in the remote-project fixture repository.
+ */
+export async function addCommitToRemoteBranch(
+	gitbutler: GitButler,
+	branchName: string,
+): Promise<void> {
+	await gitbutler.runScript("project-with-remote-branches__add-commit-to-remote-branch.sh", [
+		branchName,
+	]);
+}
+
+/**
  * Navigate to the workspace and wait for it to load.
  */
 export async function openWorkspace(page: Page): Promise<void> {
 	await page.goto("/");
 	await waitForTestId(page, "workspace-view");
+}
+
+/**
+ * Open the interactive integration modal for the currently visible upstream update action.
+ */
+export async function openInteractiveIntegrationModal(
+	page: Page,
+	branchName: string,
+): Promise<void> {
+	await clickByTestId(page, "sync-button");
+	await page.getByText("Interactive integration", { exact: true }).click();
+	await clickByTestId(page, "upstream-commits-integrate-button");
+	await expect(page.getByRole("heading", { name: `Integrate ${branchName} upstream` })).toBeVisible();
 }
 
 /**

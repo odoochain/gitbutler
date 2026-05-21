@@ -1,4 +1,5 @@
 import {
+	clickByTestId,
 	fillByTestId,
 	getByTestId,
 	textEditorFillByTestId,
@@ -75,6 +76,21 @@ export async function verifyCommitMessageEditor(
 export async function updateCommitMessage(page: Page, newTitle: string, newMessage: string) {
 	await fillByTestId(page, "commit-drawer-title-input", newTitle);
 	await textEditorFillByTestId(page, "commit-drawer-description-input", newMessage);
+}
+
+/**
+ * Create a new workspace commit through the commit drawer UI and verify it appears in the stack.
+ */
+export async function createWorkspaceCommit(page: Page, title: string, description: string) {
+	await clickByTestId(page, "start-commit-button");
+	await waitForTestId(page, "new-commit-view");
+	await fillByTestId(page, "commit-drawer-title-input", title);
+	await textEditorFillByTestId(page, "commit-drawer-description-input", description);
+	await clickByTestId(page, "commit-drawer-action-button");
+
+	const createdCommit = getByTestId(page, "commit-row").filter({ hasText: title });
+	await expect(createdCommit).toHaveCount(1);
+	await expect(createdCommit).toBeVisible();
 }
 
 /**
