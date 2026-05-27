@@ -10,6 +10,7 @@
 
 #[cfg(feature = "tokio")]
 mod context;
+pub use context::push_with_askpass;
 mod error;
 /// utilities to execute a command
 pub mod executor;

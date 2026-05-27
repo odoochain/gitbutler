@@ -382,3 +382,38 @@ pub fn target_commits(
         page_size.unwrap_or(30),
     )
 }
+
+/// Push a branch and any parent references that lie within the current workspace projection.
+#[but_api(napi)]
+#[instrument(err(Debug))]
+pub fn workspace_branch_and_ancestors_push(
+    ctx: &mut Context,
+    with_force: bool,
+    skip_force_push_protection: bool,
+    branch: gix::refs::FullName,
+    run_hooks: bool,
+    push_opts: Vec<but_gerrit::PushFlag>,
+) -> Result<()> {
+    let repo = ctx.clone_repo_for_merging_non_persisting()?;
+    let meta = ctx.meta()?;
+    let gerrit_mode_enabled = repo.git_settings()?.gitbutler_gerrit_mode.unwrap_or(false);
+    let db = gerrit_mode_enabled
+        .then(|| ctx.db.get_cache())
+        .transpose()?;
+    let gerrit_mode = match db.as_ref() {
+        Some(db) => but_workspace::ref_info::GerritMode::Enabled(db.gerrit_metadata()),
+        None => but_workspace::ref_info::GerritMode::Disabled,
+    };
+    let (head_info, ws) = but_workspace::head_info_and_workspace(
+        &repo,
+        &meta,
+        but_workspace::ref_info::Options {
+            traversal: but_graph::init::Options::limited(),
+            expensive_commit_info: true,
+            gerrit_mode,
+        },
+    )?
+    .pruned_to_entrypoint();
+
+    todo!()
+}
