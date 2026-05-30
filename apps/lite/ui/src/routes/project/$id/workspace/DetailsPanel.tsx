@@ -334,13 +334,15 @@ const CommitDetailsContent: FC<{
 				hour12: false,
 			}).format(commitDetails.commit.createdAt);
 
+			const body = commitDetails.commit.message
+				.slice(commitDetails.commit.message.indexOf("\n") + 1)
+				.trim();
+
 			return (
 				<>
-					{commitDetails.commit.message.includes("\n") && (
+					{body !== "" && (
 						<p className={classes("text-monospace", "text-body", styles.commitMessageBody)}>
-							{commitDetails.commit.message
-								.slice(commitDetails.commit.message.indexOf("\n") + 1)
-								.trim()}
+							{body}
 						</p>
 					)}
 					<div className={styles.commitDetailsMeta}>
