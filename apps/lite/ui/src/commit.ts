@@ -8,5 +8,11 @@ export const commitTitle = (message: string): string => {
 	return title ?? "(no message)";
 };
 
+export const commitBody = (message: string): string | undefined => {
+	const _body = message.slice(message.indexOf("\n") + 1).trim();
+	const body = _body === "" ? undefined : _body;
+	return body;
+};
+
 export const commitIsDiverged = (commit: Commit): boolean =>
 	commit.state.type === "LocalAndRemote" && commit.state.subject !== commit.id;
