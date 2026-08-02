@@ -7,6 +7,7 @@ export enum ModelKind {
 	Ollama = "ollama",
 	LMStudio = "lmstudio",
 	OpenRouter = "openrouter",
+	DeepSeek = "deepseek",
 }
 
 // OpenRouter model names follow the `provider/model` format (e.g. `openai/gpt-4.1-mini`)
@@ -24,6 +25,12 @@ export enum AnthropicModelName {
 	Haiku = "claude-haiku-4-5",
 	Sonnet = "claude-sonnet-4-6",
 	Opus = "claude-opus-4-6",
+}
+
+// https://platform.deepseek.com/api-docs
+export enum DeepSeekModelName {
+	Flash = "deepseek-v4-flash",
+	Pro = "deepseek-v4-pro",
 }
 
 export enum MessageRole {

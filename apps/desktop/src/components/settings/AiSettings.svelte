@@ -4,7 +4,7 @@
 	import AuthorizationBanner from "$components/settings/AuthorizationBanner.svelte";
 	import SettingsSection from "$components/shared/SettingsSection.svelte";
 	import { AISecretHandle, AI_SERVICE, GitAIConfigKey, KeyOption } from "$lib/ai/service";
-	import { OpenAIModelName, AnthropicModelName, ModelKind } from "$lib/ai/types";
+	import { OpenAIModelName, AnthropicModelName, DeepSeekModelName, ModelKind } from "$lib/ai/types";
 	import { GIT_CONFIG_SERVICE } from "$lib/config/gitConfigService";
 	import { SECRET_SERVICE } from "$lib/secrets/secretsService";
 	import { USER_SERVICE } from "$lib/user/userService.svelte";
@@ -45,6 +45,8 @@
 	let lmStudioModel: string | undefined = $state();
 	let openRouterKey: string | undefined = $state();
 	let openRouterModel: string | undefined = $state();
+	let deepSeekKey: string | undefined = $state();
+	let deepSeekModel: DeepSeekModelName | undefined = $state();
 
 	async function setConfiguration(key: GitAIConfigKey, value: string | undefined) {
 		if (!initialized) return;
@@ -78,6 +80,9 @@
 
 		openRouterKey = await aiService.getOpenRouterKey();
 		openRouterModel = await aiService.getOpenRouterModelName();
+
+		deepSeekKey = await aiService.getDeepSeekKey();
+		deepSeekModel = await aiService.getDeepSeekModelName();
 
 		// Ensure reactive declarations have finished running before we set initialized to true
 		await tick();
@@ -123,6 +128,17 @@
 		{
 			label: "Opus",
 			value: AnthropicModelName.Opus,
+		},
+	];
+
+	const deepSeekModelOptions = [
+		{
+			label: "DeepSeek V4 Pro (recommended)",
+			value: DeepSeekModelName.Pro,
+		},
+		{
+			label: "DeepSeek V4 Flash",
+			value: DeepSeekModelName.Flash,
 		},
 	];
 
@@ -178,6 +194,12 @@
 		setConfiguration(GitAIConfigKey.OpenRouterModelName, openRouterModel);
 	});
 	run(() => {
+		setSecret(AISecretHandle.DeepSeekKey, deepSeekKey);
+	});
+	run(() => {
+		setConfiguration(GitAIConfigKey.DeepSeekModelName, deepSeekModel);
+	});
+	run(() => {
 		if (form) form.modelKind.value = modelKind;
 	});
 </script>
@@ -191,7 +213,7 @@
 
 <p class="text-13 text-body ai-settings__about-text">
 	GitButler supports multiple AI providers: OpenAI and Anthropic (via API or your own key),
-	OpenRouter for access to hundreds of models, plus local models through Ollama and LM Studio.
+	OpenRouter for access to hundreds of models, DeepSeek, plus local models through Ollama and LM Studio.
 </p>
 
 <CardGroup>
@@ -422,6 +444,41 @@
 				/>
 
 				<Textbox label="Model" bind:value={openRouterModel} placeholder="openai/gpt-4.1-mini" />
+			</CardGroup.Item>
+		{/if}
+
+		<CardGroup.Item labelFor="deepseek">
+			{#snippet title()}
+				DeepSeek
+			{/snippet}
+			{#snippet actions()}
+				<RadioButton name="modelKind" id="deepseek" value={ModelKind.DeepSeek} />
+			{/snippet}
+		</CardGroup.Item>
+		{#if modelKind === ModelKind.DeepSeek}
+			<CardGroup.Item>
+				<Textbox
+					label="API key"
+					type="password"
+					bind:value={deepSeekKey}
+					required
+					placeholder="sk-..."
+				/>
+
+				<Select
+					value={deepSeekModel}
+					options={deepSeekModelOptions}
+					label="Model version"
+					onselect={(value) => {
+						deepSeekModel = value as DeepSeekModelName;
+					}}
+				>
+					{#snippet itemSnippet({ item, highlighted })}
+						<SelectItem selected={item.value === deepSeekModel} {highlighted}>
+							{item.label}
+						</SelectItem>
+					{/snippet}
+				</Select>
 			</CardGroup.Item>
 		{/if}
 
