@@ -89,6 +89,10 @@
 					// Get LM Studio configuration for more detailed error
 					const endpoint = await aiService.getLMStudioEndpoint();
 					throw new Error(`Please check LM Studio configuration: endpoint=${endpoint}`);
+				} else if (modelKind === ModelKind.DeepSeek) {
+					throw new Error("Please provide a valid DeepSeek API key");
+				} else if (modelKind === ModelKind.OpenRouter) {
+					throw new Error("Please provide a valid OpenRouter API key");
 				}
 			}
 
@@ -226,6 +230,18 @@
 									Make sure LM Studio is running locally and accessible.
 
 									<Link href="https://lmstudio.ai">Learn more</Link>
+								</span>
+							{:else if modelKind === ModelKind.DeepSeek}
+								<span>
+									Please check your DeepSeek API key.
+									<br />
+									Get your key at <Link href="https://platform.deepseek.com">platform.deepseek.com</Link>
+								</span>
+							{:else if modelKind === ModelKind.OpenRouter}
+								<span>
+									Please check your OpenRouter API key.
+									<br />
+									Get your key at <Link href="https://openrouter.ai">openrouter.ai</Link>
 								</span>
 							{/if}
 						{:else}

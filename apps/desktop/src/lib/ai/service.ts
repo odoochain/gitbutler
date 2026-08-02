@@ -22,6 +22,7 @@ import {
 	OpenAIModelName,
 	type AIClient,
 	AnthropicModelName,
+	DeepSeekModelName,
 	ModelKind,
 	MessageRole,
 	type OpenRouterModelName,
@@ -49,6 +50,7 @@ export enum AISecretHandle {
 	OpenAIKey = "aiOpenAIKey",
 	AnthropicKey = "aiAnthropicKey",
 	OpenRouterKey = "aiOpenRouterKey",
+	DeepSeekKey = "aiDeepSeekKey",
 }
 
 export enum GitAIConfigKey {
@@ -64,6 +66,7 @@ export enum GitAIConfigKey {
 	LMStudioEndpoint = "gitbutler.aiLMStudioEndpoint",
 	LMStudioModelName = "gitbutler.aiLMStudioModelName",
 	OpenRouterModelName = "gitbutler.aiOpenRouterModelName",
+	DeepSeekModelName = "gitbutler.aiDeepSeekModelName",
 }
 
 interface BaseAIServiceOpts {
@@ -252,6 +255,22 @@ export class AIService {
 		);
 	}
 
+	async getDeepSeekKey() {
+		return await this.secretsService.get(AISecretHandle.DeepSeekKey);
+	}
+
+	async getDeepSeekModelName() {
+		const defaultModel = DeepSeekModelName.Pro;
+		const storedValue = await this.gitConfig.getWithDefault<string>(
+			GitAIConfigKey.DeepSeekModelName,
+			defaultModel,
+		);
+		if (Object.values(DeepSeekModelName).includes(storedValue as DeepSeekModelName)) {
+			return storedValue as DeepSeekModelName;
+		}
+		return defaultModel;
+	}
+
 	async usingGitButlerAPI() {
 		const modelKind = await this.getModelKind();
 		const openAIKeyOption = await this.getOpenAIKeyOption();
@@ -284,13 +303,16 @@ export class AIService {
 			modelKind === ModelKind.LMStudio && !!lmStudioEndpoint && !!lmStudioModelName;
 		const openRouterActiveAndKeyProvided =
 			modelKind === ModelKind.OpenRouter && !!(await this.getOpenRouterKey());
+		const deepSeekActiveAndKeyProvided =
+			modelKind === ModelKind.DeepSeek && !!(await this.getDeepSeekKey());
 
 		return (
 			openAIActiveAndKeyProvided ||
 			anthropicActiveAndKeyProvided ||
 			ollamaActiveAndEndpointProvided ||
 			lmStudioActiveAndEndpointProvided ||
-			openRouterActiveAndKeyProvided
+			openRouterActiveAndKeyProvided ||
+			deepSeekActiveAndKeyProvided
 		);
 	}
 
@@ -370,6 +392,17 @@ export class AIService {
 			}
 
 			return new OpenAIClient(openRouterKey, openRouterModelName, "https://openrouter.ai/api/v1");
+		}
+
+		if (modelKind === ModelKind.DeepSeek) {
+			const deepSeekKey = (await this.getDeepSeekKey())?.trim();
+			const deepSeekModelName = await this.getDeepSeekModelName();
+
+			if (!deepSeekKey) {
+				throw new Error("When using DeepSeek, you must provide a valid API key");
+			}
+
+			return new OpenAIClient(deepSeekKey, deepSeekModelName, "https://api.deepseek.com");
 		}
 
 		return undefined;

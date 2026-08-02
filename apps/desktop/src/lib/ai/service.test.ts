@@ -16,6 +16,7 @@ import {
 } from "$lib/ai/service";
 import {
 	AnthropicModelName,
+	DeepSeekModelName,
 	ModelKind,
 	OpenAIModelName,
 	type AIClient,
@@ -42,6 +43,7 @@ const defaultSecretsConfig = Object.freeze({
 	[AISecretHandle.AnthropicKey]: undefined,
 	[AISecretHandle.OpenAIKey]: undefined,
 	[AISecretHandle.OpenRouterKey]: undefined,
+	[AISecretHandle.DeepSeekKey]: undefined,
 });
 
 class DummyGitConfigService extends GitConfigService {
@@ -279,6 +281,38 @@ describe("AIService", () => {
 				new Error("When using OpenRouter, you must provide a valid API key"),
 			);
 		});
+
+		test("When ai provider is DeepSeek, When an API key is present. It returns OpenAIClient", async () => {
+			const gitConfig = new DummyGitConfigService({
+				...defaultGitConfig,
+				[GitAIConfigKey.ModelProvider]: ModelKind.DeepSeek,
+			});
+			const secretsService = new DummySecretsService({
+				[AISecretHandle.DeepSeekKey]: "sk-test-key",
+			});
+			const tokenMemoryService = new TokenMemoryService();
+			const fetchMock = vi.fn();
+			const cloud = new HttpClient(fetchMock, "https://www.example.com", tokenMemoryService.token);
+			const aiService = new AIService(gitConfig, secretsService, cloud, tokenMemoryService);
+
+			expect(await aiService.buildClient()).toBeInstanceOf(OpenAIClient);
+		});
+
+		test("When ai provider is DeepSeek, When an API key is blank. It throws an error", async () => {
+			const gitConfig = new DummyGitConfigService({
+				...defaultGitConfig,
+				[GitAIConfigKey.ModelProvider]: ModelKind.DeepSeek,
+			});
+			const secretsService = new DummySecretsService();
+			const tokenMemoryService = new TokenMemoryService();
+			const fetchMock = vi.fn();
+			const cloud = new HttpClient(fetchMock, "https://www.example.com", tokenMemoryService.token);
+			const aiService = new AIService(gitConfig, secretsService, cloud, tokenMemoryService);
+
+			await expect(aiService.buildClient.bind(aiService)).rejects.toThrowError(
+				new Error("When using DeepSeek, you must provide a valid API key"),
+			);
+		});
 	});
 
 	describe("#getOpenAIModelName", () => {
@@ -338,6 +372,36 @@ describe("AIService", () => {
 			const aiService = new AIService(gitConfig, secretsService, cloud, tokenMemoryService);
 
 			expect(await aiService.getAnthropicModelName()).toBe(AnthropicModelName.Haiku);
+		});
+	});
+
+	describe("#getDeepSeekModelName", () => {
+		test("When a valid model is stored, it returns the stored value", async () => {
+			const gitConfig = new DummyGitConfigService({
+				...defaultGitConfig,
+				[GitAIConfigKey.DeepSeekModelName]: DeepSeekModelName.Pro,
+			});
+			const secretsService = new DummySecretsService();
+			const tokenMemoryService = new TokenMemoryService();
+			const fetchMock = vi.fn();
+			const cloud = new HttpClient(fetchMock, "https://www.example.com", tokenMemoryService.token);
+			const aiService = new AIService(gitConfig, secretsService, cloud, tokenMemoryService);
+
+			expect(await aiService.getDeepSeekModelName()).toBe(DeepSeekModelName.Pro);
+		});
+
+		test("When a legacy/unknown model is stored, it falls back to the default", async () => {
+			const gitConfig = new DummyGitConfigService({
+				...defaultGitConfig,
+				[GitAIConfigKey.DeepSeekModelName]: "deepseek-unknown",
+			});
+			const secretsService = new DummySecretsService();
+			const tokenMemoryService = new TokenMemoryService();
+			const fetchMock = vi.fn();
+			const cloud = new HttpClient(fetchMock, "https://www.example.com", tokenMemoryService.token);
+			const aiService = new AIService(gitConfig, secretsService, cloud, tokenMemoryService);
+
+			expect(await aiService.getDeepSeekModelName()).toBe(DeepSeekModelName.Pro);
 		});
 	});
 
