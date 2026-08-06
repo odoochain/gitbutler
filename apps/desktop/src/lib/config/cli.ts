@@ -19,6 +19,10 @@ export default class CLIManager {
 	path() {
 		return this.api.endpoints.cliPath.useQuery();
 	}
+
+	installTargetPath() {
+		return this.api.endpoints.cliInstallTargetPath.useQuery();
+	}
 }
 
 function injectEndpoints(backendApi: BackendApi) {
@@ -30,6 +34,10 @@ function injectEndpoints(backendApi: BackendApi) {
 			}),
 			cliPath: build.query<string, void>({
 				extraOptions: { command: "cli_path" },
+				query: () => ({}),
+			}),
+			cliInstallTargetPath: build.query<string, void>({
+				extraOptions: { command: "cli_install_target_path" },
 				query: () => ({}),
 			}),
 		}),
