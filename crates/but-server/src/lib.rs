@@ -745,6 +745,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         )
         .route("/install_cli", but_post(legacy::cli::install_cli_cmd))
         .route("/cli_path", but_post(legacy::cli::cli_path_cmd))
+        .route(
+            "/cli_install_target_path",
+            but_post(legacy::cli::cli_install_target_path_cmd),
+        )
         .route("/open_url", but_post(open::open_url_cmd))
         .route("/open_in_terminal", but_post(open::open_in_terminal_cmd))
         .route("/show_in_finder", but_post(open::show_in_finder_cmd))
