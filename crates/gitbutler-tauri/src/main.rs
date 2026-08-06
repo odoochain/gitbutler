@@ -335,6 +335,7 @@ fn main() -> anyhow::Result<()> {
                 legacy::forge::tauri_update_review_footers::update_review_footers,
                 legacy::cli::tauri_install_cli::install_cli,
                 legacy::cli::tauri_cli_path::cli_path,
+                legacy::cli::tauri_cli_install_target_path::cli_install_target_path,
                 legacy::workspace::tauri_head_info::head_info,
                 legacy::workspace::tauri_branch_details::branch_details,
                 legacy::workspace::tauri_discard_worktree_changes::discard_worktree_changes,

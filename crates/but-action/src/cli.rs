@@ -116,6 +116,50 @@ fn ensure_cli_path_exists_prior_to_link(cli_path: &std::path::Path) -> anyhow::R
     bail!("Run `CARGO_TARGET_DIR=$PWD/target/tauri cargo build -p but` to build the `but` binary")
 }
 
+/// Resolve the Windows `%LOCALAPPDATA%` path at runtime.
+///
+/// Falls back to `$USERPROFILE\AppData\Local` or `$HOME\AppData\Local` if the
+/// `LOCALAPPDATA` environment variable is not set.
+#[cfg(windows)]
+fn local_app_data_dir() -> anyhow::Result<std::path::PathBuf> {
+    if let Ok(val) = std::env::var("LOCALAPPDATA") {
+        return Ok(std::path::PathBuf::from(val));
+    }
+    // Fallback: LOCALAPPDATA is typically $USERPROFILE\AppData\Local
+    let base = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok()
+        .context("Could not resolve LOCALAPPDATA, USERPROFILE, or HOME")?;
+    Ok(std::path::PathBuf::from(base).join("AppData").join("Local"))
+}
+
+/// Returns the recommended absolute destination path for a per-user CLI install on Windows.
+///
+/// This is `$LOCALAPPDATA\Microsoft\WindowsApps\but.exe` (or the platform-specific
+/// equivalent filename derived from the running executable) resolved at runtime,
+/// so the returned absolute path works verbatim in both CMD and PowerShell without
+/// requiring any shell-side environment-variable expansion.
+#[cfg(windows)]
+pub fn get_cli_install_target_path() -> anyhow::Result<std::path::PathBuf> {
+    let cli_path = get_cli_path()?;
+    let but_filename = cli_path
+        .file_name()
+        .context("BUG: encountered but CLI path without /")?;
+    Ok(local_app_data_dir()?
+        .join("Microsoft")
+        .join("WindowsApps")
+        .join(but_filename))
+}
+
+/// Returns the recommended CLI install destination on Unix-like platforms.
+///
+/// This is the standard `/usr/local/bin/but` symlink location and is provided
+/// so the same API surface is available on all platforms.
+#[cfg(not(windows))]
+pub fn get_cli_install_target_path() -> anyhow::Result<std::path::PathBuf> {
+    Ok(std::path::PathBuf::from(UNIX_LINK_PATH))
+}
+
 /// On Windows, we'll provide helpful instructions rather than attempt automatic installation
 /// since:
 /// 1. Creating symlinks requires developer mode or admin privileges
@@ -129,13 +173,22 @@ fn install_cli_windows(cli_path: std::path::PathBuf) -> anyhow::Result<()> {
         .file_name()
         .context("BUG: encountered but CLI path without /")?;
 
+    let target_display = get_cli_install_target_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| {
+            format!(
+                "%LOCALAPPDATA%\\Microsoft\\WindowsApps\\{}",
+                but_filename.display()
+            )
+        });
+
     bail!(
         "Automatic CLI installation is not supported on Windows.\n\
         \n\
         To use the But CLI, you have two options:\n\
         \n\
         1. Copy the executable to a directory in your PATH:\n\
-           copy \"{}\" \"%LOCALAPPDATA%\\Microsoft\\WindowsApps\\{}\"\n\
+           copy \"{}\" \"{}\"\n\
         \n\
         2. Add the current location to your PATH environment variable:\n\
            - Press the Win key and select 'System'\n\
@@ -145,7 +198,7 @@ fn install_cli_windows(cli_path: std::path::PathBuf) -> anyhow::Result<()> {
         \n\
         After either option, restart your terminal to use the 'but' command.",
         cli_path.display(),
-        but_filename.display(),
+        target_display,
         cli_path
             .parent()
             .map(|p| p.display().to_string())

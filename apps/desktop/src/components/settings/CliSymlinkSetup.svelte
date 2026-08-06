@@ -13,23 +13,36 @@
 
 	const cliManager = inject(CLI_MANAGER);
 	const cliPath = cliManager.path();
+	const installTargetPath = cliManager.installTargetPath();
 	const backend = inject(BACKEND);
 	const platformName = backend.platformName;
 
-	function cliCommand(path: string, platform: string): string {
+	function cliCommand(
+		sourcePath: string,
+		targetPath: string | undefined,
+		platform: string,
+	): string {
 		if (platform === "windows") {
-			// Windows-specific instructions - copy to WindowsApps which is typically in PATH
-			return `copy "${path}" "%LOCALAPPDATA%\\Microsoft\\WindowsApps\\but.exe"`;
+			// Windows-specific instructions - copy to WindowsApps which is typically in PATH.
+			// Prefer the runtime-resolved absolute path so the copy command works verbatim in
+			// both CMD and PowerShell (neither shell needs to expand %LOCALAPPDATA% / $env:LOCALAPPDATA).
+			// Fall back to PowerShell-style $env:LOCALAPPDATA if the resolved path is unavailable.
+			const dest =
+				targetPath && targetPath.length > 0
+					? targetPath
+					: '$env:LOCALAPPDATA\\Microsoft\\WindowsApps\\but.exe';
+			return 'copy "' + sourcePath + '" "' + dest + '"';
 		} else {
 			// Unix-like systems (macOS, Linux)
-			return "sudo ln -sf '" + path + "' /usr/local/bin/but";
+			const dest = targetPath && targetPath.length > 0 ? targetPath : "/usr/local/bin/but";
+			return "sudo ln -sf '" + sourcePath + "' " + dest;
 		}
 	}
 </script>
 
 <div class="symlink-copy-box {classes}">
 	{#if cliPath.response}
-		{@const command = cliCommand(cliPath.response, platformName)}
+		{@const command = cliCommand(cliPath.response, installTargetPath.response, platformName)}
 		<p>{command}</p>
 		<button type="button" class="symlink-copy-icon" onclick={() => copyToClipboard(command)}>
 			<Icon name="copy" />
