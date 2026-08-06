@@ -145,7 +145,48 @@ fn push_refuses_conflicted_commits() {
 
     // Try to push the branch - should fail with an error about conflicted commits.
     env.but("push A").assert().failure().stderr_eq(str![[r#"
-Error: Cannot push branch 'A': the branch contains 1 conflicted commit.
+Error: Cannot push branch 'A': the push would include 1 conflicted commit.
+Conflicted commits: [..]
+Please resolve conflicts before pushing using 'but resolve <commit>'.
+
+"#]]);
+}
+
+#[test]
+fn push_all_exits_nonzero_when_push_fails() {
+    let env = repo_with_unpushed_branch();
+
+    // Reject every push via a pre-push hook, then push without a branch
+    // argument: the non-interactive push-all path must surface the failure
+    // in the exit code, not just in the printed summary.
+    env.invoke_bash(
+        "mkdir -p .githooks \
+         && printf '#!/bin/sh\\necho PRE-PUSH DENY; exit 1\\n' > .githooks/pre-push \
+         && chmod +x .githooks/pre-push \
+         && git config core.hooksPath .githooks",
+    );
+
+    // Counts are wildcarded: the claim is the non-zero exit on failure, not
+    // how many candidates this fixture happens to produce.
+    env.but("push").assert().failure().stderr_eq(str![[r#"
+Error: failed to push [..] of [..] branches
+
+"#]]);
+}
+
+#[test]
+fn push_refuses_conflicted_commits_on_ancestors() {
+    let env = sandbox_with_conflicted_commit();
+
+    // Stack a clean branch on top of the conflicted one.
+    env.but("branch new B --anchor A").assert().success();
+    env.file("on-top.txt", "content\n");
+    env.but("commit -b B -m 'work on top'").assert().success();
+
+    // Pushing B also pushes its ancestor A, so A's conflicted commit must
+    // refuse the push even though B itself is clean.
+    env.but("push B").assert().failure().stderr_eq(str![[r#"
+Error: Cannot push branch 'B': the push would include 1 conflicted commit.
 Conflicted commits: [..]
 Please resolve conflicts before pushing using 'but resolve <commit>'.
 

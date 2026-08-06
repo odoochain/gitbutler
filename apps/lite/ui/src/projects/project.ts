@@ -43,6 +43,12 @@ import {
 	type BranchesState,
 } from "./branches.ts";
 import { decodeBytes } from "#ui/api/bytes.ts";
+import {
+	createInitialUpstreamState,
+	getUpstreamSelectors,
+	upstreamReducers,
+	type UpstreamState,
+} from "./upstream.ts";
 
 export type SelectionState = {
 	uncommittedFiles: string | null;
@@ -60,10 +66,28 @@ export type BranchTab = "diff" | "pr";
 type WorkspaceState = {
 	checkedOperands: Record<string, CheckableOperand>;
 	detailsSelectionScope: DetailsSelectionScope | null;
+	/**
+	 * Branch segments whose commits are hidden, keyed by full ref name.
+	 *
+	 * Folded rather than unfolded, the inverse of the branches tab: the
+	 * workspace is the working view, so its commits show by default and it is
+	 * hiding them that is the exception worth recording.
+	 */
+	foldedSegments: Record<string, true>;
 	highlightedCommitIds: Array<string>;
 	mode: OutlineMode;
 	selectedBranchTabs: Record<string, BranchTab>;
 	selection: SelectionState;
+	/**
+	 * File filter queries, or `null` while a filter is closed. An open but empty
+	 * filter is not the same as a closed one: it keeps the input in place and the
+	 * list unnarrowed.
+	 *
+	 * The outline's uncommitted list and the details pane's file list filter
+	 * independently, and can both be open at once.
+	 */
+	uncommittedFilesFilter: string | null;
+	filesFilter: string | null;
 };
 
 const createInitialSelectionState = (): SelectionState => ({
@@ -76,13 +100,16 @@ const createInitialSelectionState = (): SelectionState => ({
 const createInitialWorkspaceState = (): WorkspaceState => ({
 	checkedOperands: {},
 	detailsSelectionScope: null,
+	foldedSegments: {},
 	highlightedCommitIds: [],
 	mode: defaultOutlineMode,
 	selectedBranchTabs: {},
 	selection: createInitialSelectionState(),
+	uncommittedFilesFilter: null,
+	filesFilter: null,
 });
 
-export type OutlineTab = "workspace" | "branches";
+export type OutlineTab = "workspace" | "upstream" | "branches";
 
 const defaultBranchTab: BranchTab = "diff";
 
@@ -90,6 +117,7 @@ export type ProjectState = {
 	filesVisible: boolean;
 	outlineTab: OutlineTab;
 	branches: BranchesState;
+	upstream: UpstreamState;
 	workspace: WorkspaceState;
 };
 
@@ -97,6 +125,7 @@ export const createInitialProjectState = (): ProjectState => ({
 	filesVisible: false,
 	outlineTab: "workspace",
 	branches: createInitialBranchesState(),
+	upstream: createInitialUpstreamState(),
 	workspace: createInitialWorkspaceState(),
 });
 
@@ -131,6 +160,15 @@ export const projectReducers = {
 	},
 	selectBranches: (state: ProjectState, { selection }: { selection: Operand | null }) => {
 		branchesReducers.select(state.branches, { selection });
+	},
+	selectUpstream: (state: ProjectState, { selection }: { selection: Operand | null }) => {
+		upstreamReducers.select(state.upstream, { selection });
+	},
+	toggleUpstreamSegment: (state: ProjectState, { segmentId }: { segmentId: string }) => {
+		upstreamReducers.toggleSegment(state.upstream, { segmentId });
+	},
+	toggleUpstreamIncoming: (state: ProjectState) => {
+		upstreamReducers.toggleIncoming(state.upstream);
 	},
 	selectFiles: (state: ProjectState, { selection }: { selection: string | null }) => {
 		const workspaceState = state.workspace;
@@ -403,13 +441,52 @@ export const projectReducers = {
 
 		state.outlineTab = tab;
 		state.workspace.mode = defaultOutlineMode;
-		// The branches tab has no uncommitted changes panel, so its selection
-		// cannot drive the details pane. Leave the scope alone on the way back,
-		// so returning to the workspace restores the panel it was showing.
-		if (tab === "branches") state.workspace.detailsSelectionScope = "outline";
+		// The branches and upstream tabs have no uncommitted changes panel, so
+		// their selection cannot drive the details pane. Leave the scope alone on
+		// the way back, so returning to the workspace restores the panel it was
+		// showing.
+		if (tab !== "workspace") state.workspace.detailsSelectionScope = "outline";
+	},
+	toggleSegmentFolded: (state: ProjectState, { branchRef }: { branchRef: string }) => {
+		if (state.workspace.foldedSegments[branchRef]) delete state.workspace.foldedSegments[branchRef];
+		else state.workspace.foldedSegments[branchRef] = true;
+	},
+	/**
+	 * Folds or unfolds several segments at once, for acting on a whole stack.
+	 * Toggling each of them instead would invert a partly folded stack rather
+	 * than bring it to one state.
+	 */
+	setSegmentsFolded: (
+		state: ProjectState,
+		{ branchRefs, folded }: { branchRefs: Array<string>; folded: boolean },
+	) => {
+		for (const branchRef of branchRefs) {
+			if (folded) state.workspace.foldedSegments[branchRef] = true;
+			else delete state.workspace.foldedSegments[branchRef];
+		}
 	},
 	toggleBranchUnfolded: (state: ProjectState, { branchRef }: { branchRef: string }) => {
 		branchesReducers.toggleUnfolded(state.branches, { branchRef });
+	},
+	setBranchesUnfolded: (
+		state: ProjectState,
+		{ branchRefs, unfolded }: { branchRefs: Array<string>; unfolded: boolean },
+	) => {
+		branchesReducers.setUnfolded(state.branches, { branchRefs, unfolded });
+	},
+	/** Pass `null` to close the filter, which also clears the query. */
+	setUncommittedFilesFilter: (state: ProjectState, { filter }: { filter: string | null }) => {
+		const workspaceState = state.workspace;
+		if (workspaceState.uncommittedFilesFilter === filter) return;
+
+		workspaceState.uncommittedFilesFilter = filter;
+	},
+	/** Pass `null` to close the filter, which also clears the query. */
+	setFilesFilter: (state: ProjectState, { filter }: { filter: string | null }) => {
+		const workspaceState = state.workspace;
+		if (workspaceState.filesFilter === filter) return;
+
+		workspaceState.filesFilter = filter;
 	},
 	setBranchSearch: (state: ProjectState, { search }: { search: string }) => {
 		branchesReducers.setSearch(state.branches, { search });
@@ -495,11 +572,6 @@ const selectCheckedOperandCount = createSelector(
 	(checkedOperands) => checkedOperands.length,
 );
 
-const selectHasCheckedOperands = createSelector(
-	selectCheckedOperands,
-	(checkedOperands) => checkedOperands.length > 0,
-);
-
 export const projectSelectors = {
 	selectFilesVisible: (state: ProjectState) => state.filesVisible,
 	selectOutlineTab: (state: ProjectState) => state.outlineTab,
@@ -508,6 +580,8 @@ export const projectSelectors = {
 	selectCanShowFiles: (state: ProjectState) =>
 		state.workspace.detailsSelectionScope !== "uncommitted-files",
 	selectDetailsSelectionScope: (state: ProjectState) => state.workspace.detailsSelectionScope,
+	selectUncommittedFilesFilter: (state: ProjectState) => state.workspace.uncommittedFilesFilter,
+	selectFilesFilter: (state: ProjectState) => state.workspace.filesFilter,
 	selectSelectionUncommittedFiles: (
 		state: ProjectState,
 		navigationIndex: NavigationIndex<string>,
@@ -550,6 +624,9 @@ export const projectSelectors = {
 			hunkOperandIdentityKey,
 		),
 	selectOutlineModeState: (state: ProjectState) => state.workspace.mode,
+	selectFoldedSegments: (state: ProjectState) => state.workspace.foldedSegments,
+	selectSegmentFolded: (state: ProjectState, branchRef: string) =>
+		state.workspace.foldedSegments[branchRef] === true,
 	selectHighlightedCommitIds: (state: ProjectState) => state.workspace.highlightedCommitIds,
 	selectOperandChecked: (state: ProjectState, operand: CheckableOperand) =>
 		state.workspace.checkedOperands[operandIdentityKey(operand)] !== undefined,
@@ -558,7 +635,6 @@ export const projectSelectors = {
 	selectCheckedCommitIds,
 	selectCheckedUncommittedFilePaths,
 	selectCheckedOperandCount,
-	selectHasCheckedOperands,
 	// Checking has been defined in a flexible way to support heterogeneous items, however in the UI
 	// we currently only allow a single context of checked items at a time, hence these selectors.
 	selectCheckedOperandsContext: (state: ProjectState): CheckableOperand["_tag"] | null =>
@@ -588,4 +664,5 @@ export const projectSelectors = {
 		}
 	},
 	...getBranchesSelectors((state: ProjectState) => state.branches),
+	...getUpstreamSelectors((state: ProjectState) => state.upstream),
 };

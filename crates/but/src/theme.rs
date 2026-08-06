@@ -32,7 +32,10 @@ use std::{fmt::Display, path::Path, str::FromStr, sync::OnceLock};
 use bstr::ByteSlice as _;
 use but_core::ChangeId;
 use colored::{ColoredString, Colorize as _};
-use gix::{ObjectId, refs::FullName};
+use gix::{
+    ObjectId,
+    refs::{FullName, FullNameRef},
+};
 use ratatui::{
     palette::Hsl,
     style::{Color, Modifier, Style, Styled},
@@ -681,6 +684,12 @@ fn fmt_commit_id_or_change_id(
 
 pub struct Commit<T>(pub T);
 
+impl Display for Commit<ObjectId> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fmt_commit_id(self.0, f)
+    }
+}
+
 impl Display for Commit<ChangeId> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         fmt_change_id(&self.0, f)
@@ -715,11 +724,17 @@ pub struct Branch<T>(pub T);
 
 impl Display for Branch<FullName> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Branch(&self.0).fmt(f)
+        Branch(self.0.as_ref()).fmt(f)
     }
 }
 
 impl Display for Branch<&FullName> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Branch(self.0.as_ref()).fmt(f)
+    }
+}
+
+impl Display for Branch<&FullNameRef> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Branch(&*self.0.shorten().to_str_lossy()).fmt(f)
     }

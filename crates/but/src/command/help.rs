@@ -152,7 +152,9 @@ fn print_grouped_with_truncation(
                 #[cfg(feature = "legacy")]
                 SubcommandDiscriminant::Absorb => Group::EditingCommits,
                 #[cfg(feature = "legacy")]
-                SubcommandDiscriminant::Reword => Group::EditingCommits,
+                SubcommandDiscriminant::Reword | SubcommandDiscriminant::_Reword2 => {
+                    Group::EditingCommits
+                }
                 #[cfg(feature = "legacy")]
                 SubcommandDiscriminant::Uncommit => Group::EditingCommits,
                 #[cfg(feature = "legacy")]
@@ -377,8 +379,8 @@ Branching and Committing:
   branch       Commands for managing branches
   discard      Discard branches, commits, or changes
   resolve      Resolve conflicts in a commit
-  unapply      Unapply a branch from the workspace
-  apply        Apply a branch to the workspace
+  unapply      Unapply a branch
+  apply        Apply a branch
   clean        Remove empty branches from the workspace
   pick         Cherry-pick commits into an applied branch
 
@@ -387,7 +389,7 @@ Editing Commits:
   move         Move commits and changes around
   absorb       Amends changes into the appropriate commits where they belong
   reword       Edit the commit message of the specified commit
-  uncommit     Uncommit changes from commits or committed files to the uncommi…
+  uncommit     Uncommit commits, branches, or committed files
   amend        Amend uncommitted changes into a commit or branch
 
 Operation History:
@@ -444,9 +446,7 @@ Environment variables:
         let output = strip_ansi_codes(&buf);
 
         assert!(
-            output.contains(
-                "Uncommit changes from commits or committed files to the uncommitted area"
-            ),
+            output.contains("Uncommit commits, branches, or committed files"),
             "agent help should keep the full command description"
         );
         assert!(

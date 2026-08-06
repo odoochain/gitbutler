@@ -9,6 +9,7 @@ use std::{
 };
 
 use anyhow::Context as _;
+use bstr::ByteSlice as _;
 use but_ctx::{Context, OnDemand};
 use gix::ObjectId;
 use itertools::{Itertools as _, Position};
@@ -89,6 +90,7 @@ pub struct Details {
     strings: Strings,
     selected_section: Cell<SelectedSection>,
     pending_section_selection: Cell<PendingSectionSelection>,
+    pending_cli_id_selection: Option<CliId>,
     sections: Vec<Section>,
     scroll: ScrollState,
     layout_cache: RefCell<LayoutCache>,
@@ -136,6 +138,7 @@ impl Details {
             strings: Default::default(),
             selected_section: Default::default(),
             pending_section_selection: Default::default(),
+            pending_cli_id_selection: Default::default(),
             line_reader: Default::default(),
             scroll: Default::default(),
             layout_cache: Default::default(),
@@ -185,6 +188,11 @@ impl Details {
 
     pub fn selection(&self) -> Option<&CliId> {
         self.selection.as_ref()
+    }
+
+    pub fn select_cli_id_when_available(&mut self, cli_id: CliId) {
+        self.pending_cli_id_selection = Some(cli_id);
+        self.select_pending_cli_id_in_latest_section();
     }
 
     pub fn clear_selection_for_reload(&mut self, select_first_section_when_available: bool) {
@@ -509,7 +517,14 @@ impl Details {
                         Ok(RenderThreadMessage::Line(line)) => {
                             let section_added =
                                 push_line(&mut self.lines, &mut self.sections, line);
-                            if section_added {
+                            if section_added
+                                && !select_pending_cli_id_in_latest_section(
+                                    &mut self.pending_cli_id_selection,
+                                    &self.sections,
+                                    &self.selected_section,
+                                    &self.scroll,
+                                )
+                            {
                                 apply_pending_section_selection(
                                     &self.pending_section_selection,
                                     &self.selected_section,
@@ -534,6 +549,10 @@ impl Details {
                             if self.sections.is_empty() {
                                 self.pending_section_selection
                                     .set(PendingSectionSelection::None);
+                                self.pending_cli_id_selection = None;
+                            } else if self.pending_cli_id_selection.take().is_some() {
+                                self.selected_section.set(SelectedSection::Selected(0));
+                                self.scroll.goto_top();
                             }
 
                             self.line_reader = ChannelLineReader::Finished;
@@ -1044,13 +1063,26 @@ impl Details {
         self.line_reader = ChannelLineReader::Finished;
         for line in cached_lines {
             let section_added = push_line(&mut self.lines, &mut self.sections, line);
-            if section_added {
+            if section_added && !self.select_pending_cli_id_in_latest_section() {
                 self.select_first_section_if_pending();
             }
         }
         if self.sections.is_empty() {
             self.clear_pending_first_section_selection();
+            self.pending_cli_id_selection = None;
+        } else if self.pending_cli_id_selection.take().is_some() {
+            self.selected_section.set(SelectedSection::Selected(0));
+            self.scroll.goto_top();
         }
+    }
+
+    fn select_pending_cli_id_in_latest_section(&mut self) -> bool {
+        select_pending_cli_id_in_latest_section(
+            &mut self.pending_cli_id_selection,
+            &self.sections,
+            &self.selected_section,
+            &self.scroll,
+        )
     }
 
     fn clear_lines(&mut self) {
@@ -1254,7 +1286,7 @@ impl Details {
             if let CliId::UncommittedHunkOrFile(hunk) = &*section_cli_id {
                 (
                     Span::raw(section_cli_id.to_short_string()).style(self.theme.cli_id),
-                    Span::raw(hunk.hunk_assignments.head.hunk.path.clone()),
+                    Span::raw(hunk.hunks.head.hunk.path.to_str_lossy().into_owned()),
                     DiscardOperation::Uncommitted(UncommittedSelection::changes(NonEmpty::new(
                         hunk.clone(),
                     ))),
@@ -1442,9 +1474,7 @@ impl Details {
                 };
                 // the detail view can contain hunks from multiple files, for example if viewing
                 // the uncommitted area, so only check hunks from the marked file
-                if section_hunk.hunk_assignments.head.hunk.path_bytes
-                    != hunk.hunk_assignments.head.hunk.path_bytes
-                {
+                if section_hunk.hunks.head.hunk.path != hunk.hunks.head.hunk.path {
                     return None;
                 }
                 Some(section_hunk)
@@ -1457,7 +1487,7 @@ impl Details {
             let parent_hunk = synthetic_parent_hunk(
                 &sections_for_file_cli_ids.head.id,
                 0,
-                sections_for_file_cli_ids.flat_map(|hunk| hunk.hunk_assignments.clone()),
+                sections_for_file_cli_ids.flat_map(|hunk| hunk.hunks.clone()),
             );
             if all_sections_marked {
                 marks.insert_mark(parent_hunk)?;
@@ -1503,6 +1533,36 @@ fn apply_pending_section_selection(
             pending_section_selection.set(PendingSectionSelection::None);
         }
     }
+}
+
+fn select_pending_cli_id_in_latest_section(
+    pending_cli_id_selection: &mut Option<CliId>,
+    sections: &[Section],
+    selected_section: &Cell<SelectedSection>,
+    scroll: &ScrollState,
+) -> bool {
+    let Some(target) = pending_cli_id_selection.as_ref() else {
+        return false;
+    };
+    let Some((index, section)) = sections
+        .len()
+        .checked_sub(1)
+        .map(|index| (index, &sections[index]))
+    else {
+        return false;
+    };
+    if !section
+        .cli_id
+        .as_ref()
+        .is_some_and(|cli_id| target == &**cli_id)
+    {
+        return false;
+    }
+
+    *pending_cli_id_selection = None;
+    selected_section.set(SelectedSection::Selected(index));
+    scroll.to_section(index, ScrollDirection::Down);
+    true
 }
 
 struct ChannelLineWriter {
@@ -1945,4 +2005,109 @@ fn section_is_marked(section: &Section, marks: MarksRef<'_>) -> bool {
         return false;
     };
     marks.contains_cli_id(cli_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, sync::Arc};
+
+    use bstr::BString;
+    use but_core::HunkHeader;
+    use nonempty::NonEmpty;
+
+    use super::{ScrollState, Section, SelectedSection, select_pending_cli_id_in_latest_section};
+    use crate::{
+        CliId,
+        id::{IdAndHunk, UncommittedHunkOrFile},
+        utils::diff_rendering::SectionId,
+    };
+
+    fn hunk_cli_id(id: &str, old_start: u32) -> CliId {
+        CliId::UncommittedHunkOrFile(UncommittedHunkOrFile {
+            id: id.into(),
+            hunks: NonEmpty::new(IdAndHunk {
+                id: id.into(),
+                hunk: but_core::SingleHunk {
+                    hunk_header: Some(HunkHeader {
+                        old_start,
+                        old_lines: 1,
+                        new_start: old_start,
+                        new_lines: 1,
+                    }),
+                    path: BString::from("file.txt"),
+                    diff: None,
+                },
+            }),
+            is_entire_file: false,
+        })
+    }
+
+    #[test]
+    fn pending_cli_id_selects_the_matching_section() {
+        let first = hunk_cli_id("fi:a", 1);
+        let second = hunk_cli_id("fi:b", 20);
+        let sections = vec![
+            Section {
+                id: SectionId("first"),
+                cli_id: Some(Arc::new(first)),
+                first_line: 0,
+                last_line: 1,
+            },
+            Section {
+                id: SectionId("second"),
+                cli_id: Some(Arc::new(second.clone())),
+                first_line: 2,
+                last_line: 3,
+            },
+        ];
+        let mut pending = Some(second);
+        let selected = Cell::new(SelectedSection::None);
+        let scroll = ScrollState::default();
+
+        assert!(
+            select_pending_cli_id_in_latest_section(&mut pending, &sections, &selected, &scroll,),
+            "matching section is selected"
+        );
+        assert!(
+            matches!(selected.get(), SelectedSection::Selected(1)),
+            "the second hunk section is selected"
+        );
+        assert!(pending.is_none(), "the pending target is consumed");
+    }
+
+    #[test]
+    fn pending_cli_id_only_checks_the_latest_section() {
+        let first = hunk_cli_id("fi:a", 1);
+        let second = hunk_cli_id("fi:b", 20);
+        let sections = vec![
+            Section {
+                id: SectionId("first"),
+                cli_id: Some(Arc::new(first.clone())),
+                first_line: 0,
+                last_line: 1,
+            },
+            Section {
+                id: SectionId("second"),
+                cli_id: Some(Arc::new(second)),
+                first_line: 2,
+                last_line: 3,
+            },
+        ];
+        let mut pending = Some(first);
+        let selected = Cell::new(SelectedSection::None);
+        let scroll = ScrollState::default();
+
+        assert!(
+            !select_pending_cli_id_in_latest_section(&mut pending, &sections, &selected, &scroll,),
+            "previously checked sections are not rescanned"
+        );
+        assert!(
+            pending.is_some(),
+            "an unmatched pending target is preserved"
+        );
+        assert!(
+            matches!(selected.get(), SelectedSection::None),
+            "no section is selected when the latest one does not match"
+        );
+    }
 }

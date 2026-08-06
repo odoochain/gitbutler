@@ -1,3 +1,4 @@
+use but_core::ref_metadata::StackId;
 use nonempty::NonEmpty;
 use serde::Serialize;
 
@@ -88,18 +89,12 @@ impl CliIdArg {
             CliId::UncommittedHunkOrFile(uncommitted) => {
                 ResolvedCliIdArg::UncommittedHunkOrFile(Box::new(uncommitted))
             }
-            CliId::PathPrefix {
-                id,
-                hunk_assignments,
-            } => ResolvedCliIdArg::PathPrefix {
-                id,
-                hunks: hunk_assignments,
-            },
+            CliId::PathPrefix { id, hunks } => ResolvedCliIdArg::PathPrefix { id, hunks },
             CliId::CommittedFile { committed_file, .. } => {
                 ResolvedCliIdArg::CommittedFile(committed_file)
             }
             CliId::Uncommitted { .. } => ResolvedCliIdArg::Uncommitted,
-            CliId::Stack { .. } => ResolvedCliIdArg::Stack,
+            CliId::Stack { id, stack_id } => ResolvedCliIdArg::Stack { id, stack_id },
         }))
     }
 
@@ -200,17 +195,14 @@ impl CliIdArg {
         };
         match target {
             CliId::UncommittedHunkOrFile(uncommitted) => Ok(Some(vec![uncommitted])),
-            CliId::PathPrefix {
-                id: _,
-                hunk_assignments,
-            } => Ok(Some(
-                hunk_assignments
+            CliId::PathPrefix { id: _, hunks } => Ok(Some(
+                hunks
                     .into_iter()
                     .map(|id_and_hunk| UncommittedHunkOrFile {
                         id: id_and_hunk.id.clone(),
-                        hunk_assignments: NonEmpty::new(id_and_hunk),
-                        // In a world without staging, all these hunk assignments should be turned
-                        // into "entire file" assignments for every file under the given PathPrefix.
+                        hunks: NonEmpty::new(id_and_hunk),
+                        // In a world without staging, all these hunks should be turned
+                        // into "entire file" IDs for every file under the given PathPrefix.
                         // However, currently, already assigned changes are not resolved by
                         // PathPrefix. This should all be fixed at the level of resolving the
                         // PathPrefix rather than here, though.
@@ -424,7 +416,10 @@ pub enum ResolvedCliIdArg {
         id: String,
         hunks: NonEmpty<IdAndHunk>,
     },
-    Stack,
+    Stack {
+        id: String,
+        stack_id: StackId,
+    },
 }
 
 impl ResolvedCliIdArg {
@@ -440,6 +435,18 @@ impl ResolvedCliIdArg {
         Err(bad_input(format!("Expected a commit or a branch, got {kind}")).into())
     }
 
+    /// Convert this into a branch or stack.
+    pub fn into_branch_or_stack(self) -> CliResult<BranchOrStack> {
+        let kind = match self {
+            ResolvedCliIdArg::Branch(branch) => return Ok(BranchOrStack::Branch(branch)),
+            ResolvedCliIdArg::Stack { id, stack_id } => {
+                return Ok(BranchOrStack::Stack { id, stack_id });
+            }
+            other => other.kind_for_humans(),
+        };
+        Err(bad_input(format!("Expected a branch or a stack, got {kind}")).into())
+    }
+
     /// Returns a human-readable description of the entity type.
     pub fn kind_for_humans(&self) -> &'static str {
         match self {
@@ -449,7 +456,7 @@ impl ResolvedCliIdArg {
             ResolvedCliIdArg::Branch { .. } => "a branch",
             ResolvedCliIdArg::Commit { .. } => "a commit",
             ResolvedCliIdArg::Uncommitted => "uncommitted changes",
-            ResolvedCliIdArg::Stack => "a stack",
+            ResolvedCliIdArg::Stack { .. } => "a stack",
         }
     }
 
@@ -468,7 +475,10 @@ impl ResolvedCliIdArg {
                 ResolvedCliIdArgRef::PathPrefix { id, hunks }
             }
             ResolvedCliIdArg::Uncommitted => ResolvedCliIdArgRef::Uncommitted,
-            ResolvedCliIdArg::Stack => ResolvedCliIdArgRef::Stack,
+            ResolvedCliIdArg::Stack { id, stack_id } => ResolvedCliIdArgRef::Stack {
+                id,
+                stack_id: *stack_id,
+            },
         }
     }
 }
@@ -509,15 +519,23 @@ impl PartialEq<CliId> for ResolvedCliIdArg {
             } => {
                 if let CliId::PathPrefix {
                     id: rhs_id,
-                    hunk_assignments: rhs_hunks,
+                    hunks: rhs_hunks,
                 } = other
                 {
                     return lhs_id == rhs_id && lhs_hunks == rhs_hunks;
                 }
             }
-            ResolvedCliIdArg::Stack => {
-                // stacks are being phased out of the cli so ignore them for now
-                return false;
+            ResolvedCliIdArg::Stack {
+                stack_id: lhs,
+                id: _,
+            } => {
+                if let CliId::Stack {
+                    stack_id: rhs,
+                    id: _,
+                } = other
+                {
+                    return lhs == rhs;
+                }
             }
         }
         false
@@ -533,7 +551,7 @@ impl std::fmt::Display for ResolvedCliIdArg {
             ResolvedCliIdArg::PathPrefix { .. } => f.write_str("path"),
             ResolvedCliIdArg::CommittedFile(..) => f.write_str("committed file"),
             ResolvedCliIdArg::Uncommitted => f.write_str("uncommitted changes"),
-            ResolvedCliIdArg::Stack => f.write_str("stack"),
+            ResolvedCliIdArg::Stack { .. } => f.write_str("stack"),
         }
     }
 }
@@ -551,7 +569,10 @@ pub enum ResolvedCliIdArgRef<'a> {
         hunks: &'a NonEmpty<IdAndHunk>,
     },
     Uncommitted,
-    Stack,
+    Stack {
+        id: &'a str,
+        stack_id: StackId,
+    },
 }
 
 /// Most commands need cli ids that point to either branches or commits.
@@ -570,4 +591,11 @@ impl std::fmt::Display for BranchOrCommit {
             BranchOrCommit::Branch(inner) => inner.fmt(f),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+#[expect(missing_docs)]
+pub enum BranchOrStack {
+    Branch(BranchArg),
+    Stack { id: String, stack_id: StackId },
 }

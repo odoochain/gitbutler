@@ -16,19 +16,25 @@ use nonempty::NonEmpty;
 use ratatui::prelude::*;
 
 use crate::{
-    CliId, CliResult, IdMap,
-    args::atoms::Purpose,
+    CliId, CliResult,
+    args::atoms::ResolvedCliIdArg,
     command::{
-        legacy::status::{
-            FilesStatusFlag, StatusFlags, StatusOutputLine, TuiLaunchOptions, TuiOutcome,
-            TuiRunOptions,
-            output::StatusOutputLineData,
-            tui::{
-                Selectable, Tui, count_allocations, dedup_mutation_messages,
-                details::Details,
-                event_to_messages,
-                remember_selection::{self, save_selection_to_disk},
-                render::render_app,
+        legacy::{
+            commit::{
+                self, CommitAtOperation, CommitOperation, CommitRelativeToTarget, CommitSelection,
+            },
+            reword2::CommitMessageSource,
+            status::{
+                FilesStatusFlag, StatusFlags, StatusOutputLine, TuiLaunchOptions, TuiOutcome,
+                TuiRunOptions,
+                output::StatusOutputLineData,
+                tui::{
+                    Selectable, Tui, count_allocations, dedup_mutation_messages,
+                    details::Details,
+                    event_to_messages,
+                    remember_selection::{self, save_selection_to_disk},
+                    render::render_app,
+                },
             },
         },
         open::{self, Openable},
@@ -36,6 +42,7 @@ use crate::{
     id::{CommitId, CommittedFileId},
     theme::Theme,
     tui::{Clipboard, TerminalGuard, event_polling::EventPolling},
+    utils::targeting::Side,
 };
 
 use super::{
@@ -54,7 +61,7 @@ use super::{
         KeyBinds, confirm_key_binds, default_key_binds, fuzzy_picker_key_binds, help_key_binds,
         normal_with_marks_key_binds,
     },
-    mode::{DetailsReturnMode, Mode},
+    mode::{DetailsMode, DetailsReturnMode, Mode},
     operations,
     toast::{ToastKind, Toasts},
 };
@@ -64,6 +71,9 @@ mod discard;
 pub(super) use discard::run_discard;
 pub mod mark;
 mod undo_redo;
+
+mod cherry_pick_mode;
+pub use cherry_pick_mode::*;
 
 mod command_mode;
 pub use command_mode::*;
@@ -305,10 +315,10 @@ impl Tui for App {
 impl App {
     pub fn new(
         ctx: &Context,
-        id_map: &IdMap,
         status_lines: Vec<StatusOutputLine>,
         flags: StatusFlags,
         launch_options: TuiLaunchOptions,
+        initial_target: Option<ResolvedCliIdArg>,
         run_options: TuiRunOptions,
         show_file_browser: bool,
         mut incoming_out_of_band_messages: Vec<Receiver<Message>>,
@@ -316,9 +326,24 @@ impl App {
         clipboard: Clipboard,
         operating_mode: OperatingMode,
     ) -> CliResult<Self> {
-        let cursor = if let Some(target) = launch_options.target.clone() {
-            let repo = ctx.repo.get()?;
-            let target = target.resolve_in_workspace(&repo, id_map, Purpose::Target, None)?;
+        let initial_hunk = initial_target.as_ref().and_then(|target| match target {
+            ResolvedCliIdArg::UncommittedHunkOrFile(hunk) if !hunk.is_entire_file => {
+                Some(CliId::UncommittedHunkOrFile((**hunk).clone()))
+            }
+            ResolvedCliIdArg::Commit(..)
+            | ResolvedCliIdArg::Branch(..)
+            | ResolvedCliIdArg::UncommittedHunkOrFile(..)
+            | ResolvedCliIdArg::CommittedFile(..)
+            | ResolvedCliIdArg::Uncommitted
+            | ResolvedCliIdArg::PathPrefix { .. }
+            | ResolvedCliIdArg::Stack { .. } => None,
+        });
+        let initial_committed_file = matches!(
+            initial_target.as_ref(),
+            Some(ResolvedCliIdArg::CommittedFile(..))
+        );
+
+        let cursor = if let Some(target) = initial_target {
             Cursor::select_resolved_target(target, &status_lines)?
                 .unwrap_or_else(|| Cursor::new(&status_lines))
         } else if launch_options.remember_selection
@@ -334,8 +359,11 @@ impl App {
         let (details_tx, details_rx) = std::sync::mpsc::channel::<Message>();
         incoming_out_of_band_messages.push(details_rx);
 
-        let details = Details::new(theme, details_tx, clipboard.clone());
-        let is_details_visible = launch_options.show_diff;
+        let mut details = Details::new(theme, details_tx, clipboard.clone());
+        if let Some(hunk) = initial_hunk.clone() {
+            details.select_cli_id_when_available(hunk);
+        }
+        let is_details_visible = launch_options.show_diff || initial_hunk.is_some();
 
         let app_key_binds = AppKeyBinds {
             key_binds: default_key_binds(),
@@ -343,10 +371,29 @@ impl App {
             confirm_key_binds: confirm_key_binds(),
         };
 
-        let mode = RememberToUpdateBackstack::new(match run_options {
-            TuiRunOptions::Normal => Mode::default(),
-            TuiRunOptions::PickChanges => Mode::PickChanges(Default::default()),
+        let mode = RememberToUpdateBackstack::new(match (run_options, initial_hunk.is_some()) {
+            (TuiRunOptions::Normal, false) => Mode::default(),
+            (TuiRunOptions::Normal, true) => Mode::Details(DetailsMode {
+                full_screen: false,
+                return_mode: DetailsReturnMode::Normal(Default::default()),
+            }),
+            (TuiRunOptions::PickChanges, false) => Mode::PickChanges(Default::default()),
+            (TuiRunOptions::PickChanges, true) => Mode::Details(DetailsMode {
+                full_screen: false,
+                return_mode: DetailsReturnMode::PickChanges(Default::default()),
+            }),
         });
+
+        let mut backstack = Backstack::default();
+        if initial_committed_file {
+            backstack.push_show_file_list();
+        }
+        if initial_hunk.is_some() {
+            if !launch_options.show_diff {
+                backstack.push_open_details_view(false);
+            }
+            backstack.push_leave_normal_mode();
+        }
 
         let file_browser = show_file_browser.then(FileBrowser::default);
 
@@ -367,7 +414,7 @@ impl App {
             incoming_out_of_band_messages,
             to_be_discarded: Default::default(),
             modal: Default::default(),
-            backstack: Default::default(),
+            backstack,
             fps: FpsCounter::new(),
             details,
             is_details_visible,
@@ -571,6 +618,9 @@ impl App {
                 self.handle_command(command_message, ctx, terminal_guard, out, messages)?
             }
             Message::Move(move_message) => self.handle_move(move_message, ctx, messages)?,
+            Message::CherryPick(cherry_pick_message) => {
+                self.handle_cherry_pick(cherry_pick_message, ctx, messages)?
+            }
             Message::NewBranch => {
                 self.handle_new_branch(ctx, messages)?;
             }
@@ -755,6 +805,7 @@ impl App {
                 | Mode::Move(..)
                 | Mode::Stack(..)
                 | Mode::Jump(..)
+                | Mode::CherryPick(..)
                 | Mode::MoveStack(..) => return,
                 Mode::Details(details_mode) => match &details_mode.return_mode {
                     DetailsReturnMode::PickChanges(PickChangesMode { marks }) => {
@@ -864,6 +915,7 @@ impl App {
                 | Mode::Move(..)
                 | Mode::Stack(..)
                 | Mode::MoveStack(..)
+                | Mode::CherryPick(..)
                 | Mode::Jump(..) => {}
             },
             BackstackEntry::OpenSplitDetailsView | BackstackEntry::OpenFullScreenDetailsView => {
@@ -946,17 +998,27 @@ impl App {
     }
 
     fn handle_files_toggle_global_files_list(&mut self, messages: &mut Vec<Message>) {
-        self.flags.show_files = match self.flags.show_files {
+        match self.flags.show_files {
             FilesStatusFlag::None => {
+                self.flags.show_files = FilesStatusFlag::All;
                 self.backstack.push_show_file_list();
-                FilesStatusFlag::All
             }
-            FilesStatusFlag::All | FilesStatusFlag::Commit(_) => {
-                self.backstack.remove_show_file_list();
-                FilesStatusFlag::None
-            }
-        };
+            FilesStatusFlag::All | FilesStatusFlag::Commit(_) => self.close_file_list(),
+        }
         messages.push(Message::Reload(None, ReloadCause::ViewOnly));
+    }
+
+    fn close_file_list(&mut self) {
+        let should_clear_marks = matches!(
+            self.marks_ref(),
+            mark::MarksRef::CommittedFiles { head: _, tail: _ }
+        );
+
+        self.flags.show_files = FilesStatusFlag::None;
+        self.backstack.remove_show_file_list();
+        if should_clear_marks {
+            self.handle_clear_marks();
+        }
     }
 
     fn handle_files_toggle_files_for_selected_commit(
@@ -973,8 +1035,7 @@ impl App {
                 }
                 FilesStatusFlag::Commit(_) => {}
                 FilesStatusFlag::All => {
-                    self.flags.show_files = FilesStatusFlag::None;
-                    self.backstack.remove_show_file_list();
+                    self.close_file_list();
                     messages.push(Message::Reload(None, ReloadCause::ViewOnly));
                     return Ok(());
                 }
@@ -988,24 +1049,23 @@ impl App {
                 id: _,
             } = &**cli_id
         {
-            if !operations::commit_is_empty(ctx, *commit_id)? {
+            let commit_id = *commit_id;
+            if !operations::commit_is_empty(ctx, commit_id)? {
                 let select_after_reload = match self.flags.show_files {
                     FilesStatusFlag::None => {
-                        self.flags.show_files = FilesStatusFlag::Commit(*commit_id);
+                        self.flags.show_files = FilesStatusFlag::Commit(commit_id);
                         self.backstack.push_show_file_list();
-                        Some(SelectAfterReload::FirstFileInCommit(*commit_id))
+                        Some(SelectAfterReload::FirstFileInCommit(commit_id))
                     }
                     FilesStatusFlag::All | FilesStatusFlag::Commit(_) => {
-                        self.flags.show_files = FilesStatusFlag::None;
-                        self.backstack.remove_show_file_list();
-                        Some(SelectAfterReload::Commit(*commit_id))
+                        self.close_file_list();
+                        Some(SelectAfterReload::Commit(commit_id))
                     }
                 };
                 messages.push(Message::Reload(select_after_reload, ReloadCause::ViewOnly));
             }
         } else {
-            self.flags.show_files = FilesStatusFlag::None;
-            self.backstack.remove_show_file_list();
+            self.close_file_list();
             messages.push(Message::Reload(None, ReloadCause::ViewOnly));
         };
 
@@ -1050,10 +1110,10 @@ impl App {
                         CliId::UncommittedHunkOrFile(hunk) => {
                             let details_selection_changed =
                                 changed_paths.iter().any(|changed_path| {
-                                    hunk.hunk_assignments
+                                    hunk.hunks
                                         .head
                                         .hunk
-                                        .path_bytes
+                                        .path
                                         .to_path()
                                         .is_ok_and(|path| path == changed_path)
                                 });
@@ -1072,7 +1132,7 @@ impl App {
                                     StatusOutputLineData::UncommittedFile { cli_id } => {
                                         match &**cli_id {
                                             CliId::UncommittedHunkOrFile(uncommitted) => {
-                                                Some(&uncommitted.hunk_assignments)
+                                                Some(&uncommitted.hunks)
                                             }
                                             CliId::PathPrefix { .. }
                                             | CliId::CommittedFile { .. }
@@ -1099,8 +1159,8 @@ impl App {
                                     | StatusOutputLineData::Hint
                                     | StatusOutputLineData::NoAssignmentsUnstaged => None,
                                 })
-                                .flat_map(|assignments| assignments.iter())
-                                .map(|assignment| assignment.hunk.path_bytes.as_ref());
+                                .flat_map(|hunks| hunks.iter())
+                                .map(|id_and_hunk| id_and_hunk.hunk.path.as_ref());
                             let current_uncommitted_paths = changes
                                 .worktree_changes
                                 .changes
@@ -1366,28 +1426,51 @@ impl App {
                     return Ok(());
                 };
 
-                let commit_result =
-                    operations::create_empty_commit_relative_to_branch(ctx, &branch.name)?;
+                let mut guard = ctx.exclusive_worktree_access();
+                let mut meta = ctx.meta()?;
+
+                let outcome = commit::run(
+                    ctx,
+                    &mut meta,
+                    guard.write_permission(),
+                    CommitOperation::CommitAt(CommitAtOperation {
+                        target: CommitRelativeToTarget::BranchTip {
+                            name: Category::LocalBranch.to_full_name(&*branch.name)?,
+                        },
+                    }),
+                    CommitSelection::Nothing,
+                    CommitMessageSource::Empty,
+                )?;
 
                 messages.push(Message::Reload(
-                    Some(SelectAfterReload::Commit(commit_result.new_commit)),
+                    Some(SelectAfterReload::Commit(outcome.new_commit.commit_id)),
                     ReloadCause::Mutation,
                 ));
             }
             StatusOutputLineData::Commit { cli_id, .. } => {
-                let CliId::Commit {
-                    commit: CommitId { commit_id, .. },
-                    id: _,
-                } = &**cli_id
-                else {
+                let CliId::Commit { commit, id: _ } = &**cli_id else {
                     return Ok(());
                 };
 
-                let commit_result =
-                    operations::create_empty_commit_relative_to_commit(ctx, *commit_id)?;
+                let mut guard = ctx.exclusive_worktree_access();
+                let mut meta = ctx.meta()?;
+
+                let outcome = commit::run(
+                    ctx,
+                    &mut meta,
+                    guard.write_permission(),
+                    CommitOperation::CommitAt(CommitAtOperation {
+                        target: CommitRelativeToTarget::Commit {
+                            commit: commit.clone(),
+                            side: Side::Above,
+                        },
+                    }),
+                    CommitSelection::Nothing,
+                    CommitMessageSource::Empty,
+                )?;
 
                 messages.push(Message::Reload(
-                    Some(SelectAfterReload::Commit(commit_result.new_commit)),
+                    Some(SelectAfterReload::Commit(outcome.new_commit.commit_id)),
                     ReloadCause::Mutation,
                 ));
             }
@@ -1479,7 +1562,7 @@ impl App {
                 id: _,
             } => path.to_str_lossy(),
             CliId::UncommittedHunkOrFile(uncommitted) => {
-                Cow::Borrowed(&*uncommitted.hunk_assignments.first().hunk.path)
+                uncommitted.hunks.first().hunk.path.to_str_lossy()
             }
             CliId::PathPrefix { .. } | CliId::Uncommitted { .. } | CliId::Stack { .. } => {
                 return Ok(());
@@ -1577,7 +1660,7 @@ impl App {
                 ctx,
                 std::iter::once(head)
                     .chain(tail)
-                    .map(|hunk| hunk.hunk_assignments.head.hunk.path_bytes.as_bstr()),
+                    .map(|hunk| hunk.hunks.head.hunk.path.as_bstr()),
             ),
             mark::MarksRef::CommittedFiles { head, tail } => openable_from_paths(
                 ctx,
@@ -1662,22 +1745,18 @@ impl App {
     }
 
     /// Returns the currently selected commit id when the selected line is a commit.
-    fn selected_commit_id(&self) -> Option<gix::ObjectId> {
+    fn selected_commit_id(&self) -> Option<CommitId> {
         let selection = self.cursor.selected_line(&self.status_lines)?;
 
         let StatusOutputLineData::Commit { cli_id, .. } = &selection.data else {
             return None;
         };
 
-        let CliId::Commit {
-            commit: CommitId { commit_id, .. },
-            id: _,
-        } = &**cli_id
-        else {
+        let CliId::Commit { commit, id: _ } = &**cli_id else {
             return None;
         };
 
-        Some(*commit_id)
+        Some(commit.clone())
     }
 
     fn handle_pick_and_goto_branch(&mut self, ctx: &mut Context) -> anyhow::Result<()> {

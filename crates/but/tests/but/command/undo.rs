@@ -50,12 +50,13 @@ where
     );
 
     // Act
-    env.but("undo").assert().success().stdout_eq(
-        r#"Undoing operation...
-  Reverting to: [..]
-✓ Undo completed successfully! Restored to snapshot:[..]
-"#,
-    );
+    env.but("undo")
+        .assert()
+        .success()
+        .stdout_eq(snapbox::str![[r#"
+Undid [..] (2000-01-02 00:00:00): [..]
+
+"#]]);
 
     // Assert
     env.but("status")
@@ -143,7 +144,10 @@ fn can_undo_unapply() {
         env.but("unapply A")
             .assert()
             .success()
-            .stdout_eq("Unapplied stack with branches 'A' from workspace\n")
+            .stdout_eq(snapbox::str![[r#"
+Unapplied stack with 'A' from workspace
+
+"#]])
             .stderr_eq("");
     });
 }

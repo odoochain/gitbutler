@@ -122,7 +122,11 @@ fn write_comment(
 impl CliOutput for CommentOutcome {
     fn on_json(self) -> impl Serialize {
         #[derive(Serialize)]
-        #[serde(untagged, rename_all_fields = "camelCase")]
+        #[serde(
+            tag = "type",
+            rename_all = "camelCase",
+            rename_all_fields = "camelCase"
+        )]
         enum Output {
             Listed { comments: Vec<DiffComment> },
             Archived { archived: String },
@@ -277,7 +281,7 @@ fn resolve(ctx: &Context, args: Platform, perm: &RepoShared) -> CliResult<Commen
             let commit_id = commit
                 .map(|commit| -> CliResult<gix::ObjectId> {
                     let repo = ctx.repo.get()?;
-                    let id_map = IdMap::new_from_context(ctx, None, perm)?;
+                    let id_map = IdMap::new_from_context(ctx, perm)?;
                     let value = commit.to_string();
                     match commit.resolve_in_workspace(&repo, &id_map, Purpose::Target, None)? {
                         ResolvedCliIdArg::Commit(commit) => Ok(commit.commit_id),

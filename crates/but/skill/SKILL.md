@@ -65,19 +65,20 @@ The first token on each `but diff` / `but status` line is that line's ID — pas
 - Several commits from one diff: chain `but commit` calls with `&&` (commits stack oldest-first)
 - Commit at a specific history position: `--above <commit-or-branch>` or `--below <commit-or-branch>` instead of `-b`
 - Only one targeting flag (`-b` / `--above` / `--below`) per command. Targeting is **required** when more than one **stack** is applied; without it `but commit` fails with "Unclear where to commit. Found more than one stack". Several branches stacked together count as one stack — an untargeted commit then silently lands on the stack's top branch, so pass `-b` whenever the branch matters.
-- Always pass `-m "<msg>"` (or `--no-message`) to `but commit`, and to `but squash` whenever its sources are commits or branches — those compose a new message, and without a flag an editor opens and blocks. Squash sources that are uncommitted or committed files reuse the target's message and need no flag; squashing into `zz` rejects message flags outright.
+- Always pass `-m "<msg>"` (or `--no-message`) to `but commit`, and to `but squash` whenever its sources are commits or branches unless the target is `zz` — those compose a new message, and without a flag an editor opens and blocks. Squash sources that are uncommitted or committed files reuse the target's message and need no flag; squashing into `zz` rejects message flags outright.
 - Amend: `but amend -t <commit-or-branch> <file-or-hunk-id> <file-or-hunk-id>` — a branch target resolves to its newest commit
-- Uncommit: `but uncommit <commit-id>` (whole commit) or `but uncommit <commit-id>:<file-id>` (one committed file); multiple committed-file sources in one call must come from one commit
+- Uncommit: `but uncommit <commit-id>` (whole commit), `but uncommit <branch>` (all commits and remove the branch), or `but uncommit <commit-id>:<file-id>` (one committed file); multiple committed-file sources in one call must come from one commit
 - Insert empty commit: `but commit --empty -b <branch> -m "<msg>"`
 - Squash commits: `but squash <source-commit-id> [<source-commit-id>...] -t <target-commit-id> -m "<msg>"`
 - Squash a whole branch into one commit: `but squash <branch> -m "<msg>"` (no `-t`)
+- Uncommit and remove a branch: `but uncommit <branch>`
 - Reorder commits: `but move <commit-id> --below <commit-id>` (`--above` for the other direction; **commit IDs**, not branch names)
 - Reorder a block: `but move <commit-id> <commit-id> --below <following-commit-id>` or `--above <preceding-commit-id>` (both anchors accept multiple space-separated sources)
 - Move commit to branch top: `but move <commit-id> -b <branch>`
 - Stack branches: `but move <branch> --above <target-branch>` (**branch names or branch CLI IDs**)
 - Tear off a branch: `but move <branch> --unstack`
 - Discard: `but discard <id> [<id>...]` — accepts branches, commits, committed files, uncommitted files/hunks, or `zz` for all uncommitted changes
-- Push: `but push <branch-name>` — always specify the branch; bare `but push` pushes ALL branches when run non-interactively
+- Push: `but push <top-branch>` — pushes the selected branch and its ancestors; to update a stack, select its top branch once and never loop. Bare `but push` pushes all unpushed work when run non-interactively — one push per stack (its topmost unpushed branch, ancestors included), so output has one entry per stack, not per branch. It exits non-zero if any stack failed; stacks that already pushed stay pushed, and rerunning after fixing the failure is safe (up-to-date stacks are skipped)
 - Pull (update workspace from the target): `but pull` — the output reports the result; `but pull --check` previews without updating when a preview is actually needed
 - Create PR: `but pr new <branch-id> [-m "Title..."] [-F pr_message.txt] [-t] [--draft]` — auto-pushes first; do not run `but push` before it
 
@@ -146,7 +147,7 @@ To make one existing branch depend on another: `but move <child-branch> --above 
 
 ### Create or manage pull requests
 
-`but pr new <branch-id>` pushes the branch and creates the PR in one step — no prior `but push`. Provide `-F pr_message.txt`, `-t`, or `-m` with real newlines (zsh/bash: `-m $'Title\n\nBody'`) so no editor opens. If forge auth is missing, run `but config forge auth`.
+`but pr new <branch-id>` pushes the selected branch and its ancestors, then creates the PR in one step — no prior `but push`. Provide `-F pr_message.txt`, `-t`, or `-m` with real newlines (zsh/bash: `-m $'Title\n\nBody'`) so no editor opens. If forge auth is missing, run `but config forge auth`.
 
 For stacked branches `but pr` is mandatory (it sets PR bases and stack metadata; `gh pr create` breaks that). To publish a whole stack: `but pr new <top-branch-id> -t`. Manage with `but pr auto-merge|set-draft|set-ready <selector>`. See `references/reference.md` for details.
 

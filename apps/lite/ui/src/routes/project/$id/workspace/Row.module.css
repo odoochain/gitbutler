@@ -23,6 +23,13 @@
 	padding-block: calc(var(--panel-padding-block) - 2px);
 }
 
+/* A section header whose contents are boxes rather than text — a filter input,
+   say. It drops the label's extra inset so its contents line up with the
+   backgrounds of the rows in the section below. */
+.sectionHeaderFlush {
+	padding-inline: var(--panel-padding-inline);
+}
+
 .containerInteractive {
 	border-radius: var(--radius-button);
 
@@ -31,11 +38,60 @@
 	}
 }
 
+/* Placed before .containerSelected so the focused selection's fill wins on a
+   row that is both. */
+.containerChecked {
+	background-color: color-mix(var(--fill-pop-bg) 15%, transparent);
+
+	/* Deepens by the same amount an unchecked row picks up from
+	   --opacity-bg-hover, so hover reads the same everywhere. */
+	&:where(.containerInteractive:hover) {
+		background-color: color-mix(var(--fill-pop-bg) 20%, transparent);
+	}
+
+	/* A run of checked rows reads as one block: the corners where two of them
+	   meet are squared off so the tints join without a notch. */
+	&:has(+ .containerChecked) {
+		border-end-start-radius: 0;
+		border-end-end-radius: 0;
+	}
+
+	.containerChecked + & {
+		border-start-start-radius: 0;
+		border-start-end-radius: 0;
+	}
+}
+
 .containerSelected {
-	background-color: color-mix(var(--fill-gray-bg) var(--opacity-bg-selected-blur), transparent);
+	/* Unfocused, the tint alone is faint enough to blend into an already tinted
+	   or busy background, so the row carries a hairline as well. Drawn as an
+	   inset outline: it costs no layout, and it follows whatever corners the row
+	   ends up with — including the squared ones inside a run of checked rows. */
+	outline: 1px solid color-mix(var(--fill-gray-bg) 25%, transparent);
+	outline-offset: -1px;
+
+	/* A checked row already carries a tint of its own, so selection leaves its
+	   background alone and speaks through the outline — which joins the pop
+	   family so it doesn't drop a gray line into a run of checked rows. */
+	&:not(.containerChecked) {
+		/* Half the usual blurred-selection tint, since the outline now carries
+		   most of the state and the fill only has to hint at it. Derived from the
+		   selection token rather than the hover one it currently matches, so the
+		   two can be tuned apart. */
+		background-color: color-mix(
+			var(--fill-gray-bg) calc(var(--opacity-bg-selected-blur) / 2),
+			transparent
+		);
+	}
+
+	&.containerChecked {
+		outline-color: color-mix(var(--fill-pop-bg) 80%, transparent);
+	}
 
 	&:has(:is(textarea, input):focus),
 	[data-selection-focus-styles="true"] [data-selection-scope]:focus & {
+		/* The focused fill is solid — it carries the state on its own. */
+		outline-color: transparent;
 		background-color: var(--fill-gray-bg);
 		color: var(--fill-gray-fg);
 	}
@@ -71,7 +127,7 @@
 	.containerSelected &,
 	&.toolbarForceVisible {
 		display: flex;
-		column-gap: 8px;
+		column-gap: 10px;
 		align-items: center;
 		/* Center buttons of any height within the first row line. */
 		height: var(--single-line-row-height);
@@ -80,6 +136,78 @@
 	button:has([data-icon]) {
 		margin-inline: -4px;
 	}
+}
+
+/* The disclosure control sitting on the row's graph rail. Hovering or focusing
+   the row swaps the rail's glyph for a chevron: only the glyph's own segment is
+   swapped, so the rail below it goes on drawing. */
+.foldToggle {
+	display: flex;
+	position: relative;
+	align-self: stretch;
+	padding: 0;
+	border: none;
+	background: none;
+	color: inherit;
+	cursor: pointer;
+
+	.container:hover &,
+	.container:focus-within &,
+	.containerSelected & {
+		--graph-segment-glyph-visibility: hidden;
+	}
+}
+
+.foldChevron {
+	display: none;
+
+	.container:hover &,
+	.container:focus-within &,
+	.containerSelected & {
+		display: flex;
+		position: absolute;
+		align-items: center;
+		justify-content: center;
+		/* Occupies exactly the glyph segment it stands in for. */
+		height: var(--single-line-row-height);
+		inset-block-start: 0;
+		inset-inline: 0;
+		color: var(--text-3);
+	}
+
+	/* Picks up under the cursor so the rail reads as a target and not just an
+	   indicator. Must follow the block above, which it ties on specificity. */
+	.foldToggle:hover &,
+	.foldToggle:focus-visible & {
+		color: var(--text-2);
+	}
+}
+
+.foldGlyph {
+	display: flex;
+
+	/* The indicator takes over the rail from the second line down and draws its
+	   own line around the rings, so this one has to stop at the glyph rather
+	   than run through them. */
+	.foldToggle:has(.foldIndicator) & {
+		--graph-segment-rail-visibility: hidden;
+	}
+}
+
+/* Owns the rail from one line below the glyph downwards, so it survives the
+   hover swap above it and reports the folded state whether or not the row is
+   hovered. */
+.foldIndicator {
+	/* The swap hides the glyph through an inherited property, and this is a
+	   glyph segment too — opt back in, or the indicator vanishes on hover
+	   along with the glyph it is meant to outlast. */
+	--graph-segment-glyph-visibility: visible;
+
+	display: flex;
+	position: absolute;
+	inset-block: var(--single-line-row-height) 0;
+	inset-inline: 0;
+	pointer-events: none;
 }
 
 .rowCheckbox {
@@ -98,6 +226,42 @@
 
 .labelFooter {
 	padding-block-end: var(--single-line-row-label-padding-block);
+}
+
+/* The label column of a two-line row: heading above, meta below. */
+.labelGroup {
+	display: flex;
+	flex-grow: 1;
+	flex-direction: column;
+	min-width: 0;
+}
+
+/* A row's second line: small, muted facts about the row's subject. */
+.meta {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.metaItem {
+	display: flex;
+	flex-shrink: 0;
+	align-items: center;
+	/* Match small button height to prevent layout shift when buttons appear/disappear. */
+	height: 20px;
+	gap: 4px;
+}
+
+/* Item that yields space to its siblings by truncating its text. */
+.metaItemShrinkable {
+	flex-shrink: 1;
+	min-width: 0;
+}
+
+.metaItemText {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .label {

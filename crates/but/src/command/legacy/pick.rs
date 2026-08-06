@@ -33,9 +33,9 @@ use crate::{
 
 #[derive(Debug)]
 pub struct PickOutcome {
-    sources: Vec<ObjectId>,
-    new_commits: Vec<CommitId>,
-    branch_name: Option<BranchNameTarget>,
+    pub sources: Vec<ObjectId>,
+    pub new_commits: Vec<CommitId>,
+    pub branch_name: Option<BranchNameTarget>,
 }
 
 impl CliOutputHuman for PickOutcome {
@@ -133,7 +133,7 @@ pub fn pick(
 ) -> CliResult<PickOutcome> {
     let mut guard = ctx.exclusive_worktree_access();
     let mut meta = ctx.meta()?;
-    let id_map = IdMap::new_from_context(ctx, None, guard.read_permission())?;
+    let id_map = IdMap::new_from_context(ctx, guard.read_permission())?;
     let head_info = but_api::legacy::workspace::head_info(ctx)?;
 
     let pick_op = resolve(
@@ -181,7 +181,7 @@ fn resolve(
                         | ResolvedCliIdArg::CommittedFile(..)
                         | ResolvedCliIdArg::Uncommitted
                         | ResolvedCliIdArg::PathPrefix { .. }
-                        | ResolvedCliIdArg::Stack => Err(bad_input(format!(
+                        | ResolvedCliIdArg::Stack { .. } => Err(bad_input(format!(
                             "Only commits can be cherry-picked. {} is {}",
                             source,
                             resolved.kind_for_humans()
@@ -217,21 +217,30 @@ fn resolve(
         )?
     };
 
-    Ok(PickOperation { sources, commit_op })
+    Ok(PickOperation {
+        sources,
+        commit_op,
+        order_commits_by_parentage: false,
+    })
 }
 
-struct PickOperation {
-    sources: Vec<ObjectId>,
-    commit_op: CommitOperation,
+pub struct PickOperation {
+    pub sources: Vec<ObjectId>,
+    pub commit_op: CommitOperation,
+    pub order_commits_by_parentage: bool,
 }
 
-fn run(
+pub fn run(
     ctx: &mut Context,
     meta: &mut impl RefMetadata,
     perm: &mut RepoExclusive,
     pick_op: PickOperation,
 ) -> anyhow::Result<PickOutcome> {
-    let PickOperation { sources, commit_op } = pick_op;
+    let PickOperation {
+        sources,
+        commit_op,
+        order_commits_by_parentage,
+    } = pick_op;
 
     let snapshot_details =
         SnapshotDetails::new(OperationKind::CherryPick).with_count(sources.len());
@@ -261,14 +270,19 @@ fn run(
                         sources.iter().copied(),
                         RelativeTo::Reference(branch_name.clone()),
                         InsertSide::Below,
+                        order_commits_by_parentage,
                     )?;
 
                     (new_commits, Some(BranchNameTarget::New(branch_name)))
                 }
                 CommitOperation::CommitAt(op) => {
                     let (relative_to, side, branch_name_target) = op.create_target(&mut tx)?;
-                    let new_commits =
-                        tx.cherry_pick_commits(sources.iter().copied(), relative_to, side)?;
+                    let new_commits = tx.cherry_pick_commits(
+                        sources.iter().copied(),
+                        relative_to,
+                        side,
+                        order_commits_by_parentage,
+                    )?;
 
                     (new_commits, branch_name_target)
                 }

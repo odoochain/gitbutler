@@ -10,16 +10,18 @@ use ratatui::{backend::Backend, prelude::Span};
 use crate::{
     CliId,
     command::legacy::{
-        commit, reword2,
+        commit,
+        reword2::CommitMessageSource,
         status::{
             output::StatusOutputLineData,
             tui::{
                 App, DetailsLayoutMessage, Message, Mode, ReloadCause, RewordMessage,
                 SelectAfterReload,
                 app::{MoveCursorDiration, mark::hunk_is_child_of},
+                graph_extension::ExtensionDirection,
                 render::{
-                    ModeRender, RenderSingleLineSpans, render_commit_operation_target_marker,
-                    source_span,
+                    ModeRender, OperationExtension, RenderSingleLineSpans,
+                    render_commit_operation_target_marker, source_span,
                 },
             },
         },
@@ -64,6 +66,21 @@ pub enum CommitSource {
 }
 
 impl ModeRender for CommitMode {
+    fn operation_extension(&self, data: &StatusOutputLineData) -> Option<OperationExtension<'_>> {
+        let direction = if matches!(data, StatusOutputLineData::Commit { .. }) {
+            self.insert_side.into()
+        } else if matches!(data, StatusOutputLineData::Branch { .. }) {
+            ExtensionDirection::Below
+        } else {
+            return None;
+        };
+
+        Some(OperationExtension::Commit {
+            mode: self,
+            direction,
+        })
+    }
+
     fn render_operation_target_marker(
         &self,
         app: &App,
@@ -467,12 +484,12 @@ where
     let mut meta = ctx.meta()?;
 
     let (reword_op, reword_msg) = match message_composer {
-        CommitMessageComposer::Editor => (reword2::RewordCommitOperation::UseEditor, None),
+        CommitMessageComposer::Editor => (CommitMessageSource::Editor { initial: None }, None),
         CommitMessageComposer::Inline => (
-            reword2::RewordCommitOperation::NoMessage,
+            CommitMessageSource::Empty,
             Some(Message::Reword(RewordMessage::InlineStart)),
         ),
-        CommitMessageComposer::Empty => (reword2::RewordCommitOperation::NoMessage, None),
+        CommitMessageComposer::Empty => (CommitMessageSource::Empty, None),
     };
 
     let _suspend_guard = reword_op

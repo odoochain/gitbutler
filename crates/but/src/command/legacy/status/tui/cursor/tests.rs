@@ -9,6 +9,7 @@ use ratatui_textarea::TextArea;
 use super::{Cursor, is_selectable_in_mode};
 use crate::{
     CliId,
+    args::atoms::ResolvedCliIdArg,
     command::legacy::status::{
         CommitClassification, FilesStatusFlag,
         output::{StatusOutputContent, StatusOutputLine, StatusOutputLineData},
@@ -21,7 +22,7 @@ use crate::{
             },
         },
     },
-    id::{BranchId, CommitId, CommittedFileId, IdAndHunk, UncommittedHunkOrFile, WorktreeHunk},
+    id::{BranchId, CommitId, CommittedFileId, IdAndHunk, UncommittedHunkOrFile},
 };
 
 fn line(data: StatusOutputLineData) -> StatusOutputLine {
@@ -36,16 +37,16 @@ fn uncommitted_area(id: &str) -> Arc<CliId> {
     Arc::new(CliId::Uncommitted { id: id.into() })
 }
 
-fn commit_id(hex: &str) -> gix::ObjectId {
-    gix::ObjectId::from_hex(hex.as_bytes()).unwrap()
+fn commit_id(hex: &str) -> CommitId {
+    CommitId {
+        commit_id: gix::ObjectId::from_hex(hex.as_bytes()).unwrap(),
+        change_id: None,
+    }
 }
 
 fn commit_cli_id(hex: &str, id: &str) -> Arc<CliId> {
     Arc::new(CliId::Commit {
-        commit: CommitId {
-            commit_id: commit_id(hex),
-            change_id: None,
-        },
+        commit: commit_id(hex),
         id: id.into(),
     })
 }
@@ -53,8 +54,8 @@ fn commit_cli_id(hex: &str, id: &str) -> Arc<CliId> {
 fn commit_cli_id_with_change_id(hex: &str, id: &str, change_id: u128) -> Arc<CliId> {
     Arc::new(CliId::Commit {
         commit: CommitId {
-            commit_id: commit_id(hex),
             change_id: Some(ChangeId::from_number_for_testing(change_id)),
+            ..commit_id(hex)
         },
         id: id.into(),
     })
@@ -63,7 +64,7 @@ fn commit_cli_id_with_change_id(hex: &str, id: &str, change_id: u128) -> Arc<Cli
 fn committed_file_cli_id(hex: &str, path: &str, id: &str) -> Arc<CliId> {
     Arc::new(CliId::CommittedFile {
         committed_file: CommittedFileId {
-            commit_id: commit_id(hex),
+            commit_id: commit_id(hex).commit_id,
             path: path.into(),
             change_id: None,
         },
@@ -93,19 +94,15 @@ fn stack_branch_line(name: &str, id: &str, stack_id: StackId) -> StatusOutputLin
     })
 }
 
-fn hunk_assignment(path: &str, old_start: u32) -> WorktreeHunk {
-    WorktreeHunk {
-        id: None,
+fn hunk(path: &str, old_start: u32) -> but_core::SingleHunk {
+    but_core::SingleHunk {
         hunk_header: Some(HunkHeader {
             old_start,
             old_lines: 1,
             new_start: old_start,
             new_lines: 1,
         }),
-        path: path.to_owned(),
-        path_bytes: BString::from(path),
-        line_nums_added: None,
-        line_nums_removed: None,
+        path: BString::from(path),
         diff: None,
     }
 }
@@ -117,9 +114,9 @@ fn uncommitted_cli_id(path: &str, id: &str) -> Arc<CliId> {
 fn uncommitted_cli_id_with_old_start(path: &str, id: &str, old_start: u32) -> Arc<CliId> {
     Arc::new(CliId::UncommittedHunkOrFile(UncommittedHunkOrFile {
         id: id.to_owned(),
-        hunk_assignments: NonEmpty::new(IdAndHunk {
+        hunks: NonEmpty::new(IdAndHunk {
             id: id.to_owned(),
-            hunk: hunk_assignment(path, old_start),
+            hunk: hunk(path, old_start),
         }),
         is_entire_file: true,
     }))
@@ -177,6 +174,76 @@ where
     marks
 }
 
+#[test]
+fn select_resolved_target_selects_committed_file() {
+    let commit_id = commit_id("0123456789012345678901234567890123456789").commit_id;
+    let committed_file = CommittedFileId {
+        commit_id,
+        path: "file.txt".into(),
+        change_id: None,
+    };
+    let lines = vec![line(StatusOutputLineData::File {
+        cli_id: committed_file_cli_id(
+            "0123456789012345678901234567890123456789",
+            "file.txt",
+            "a:b",
+        ),
+    })];
+
+    let cursor =
+        Cursor::select_resolved_target(ResolvedCliIdArg::CommittedFile(committed_file), &lines)
+            .expect("committed file target should be supported");
+
+    assert_eq!(
+        cursor,
+        Some(Cursor(0)),
+        "the committed file row is selected"
+    );
+}
+
+#[test]
+fn select_resolved_target_selects_parent_file_for_hunk() {
+    let first_hunk = IdAndHunk {
+        id: "fi:a".into(),
+        hunk: hunk("file.txt", 1),
+    };
+    let second_hunk = IdAndHunk {
+        id: "fi:b".into(),
+        hunk: hunk("file.txt", 20),
+    };
+    let file = UncommittedHunkOrFile {
+        id: "fi".into(),
+        hunks: NonEmpty {
+            head: first_hunk,
+            tail: vec![second_hunk.clone()],
+        },
+        is_entire_file: true,
+    };
+    let selected_hunk = UncommittedHunkOrFile {
+        id: second_hunk.id.clone(),
+        hunks: NonEmpty::new(second_hunk),
+        is_entire_file: false,
+    };
+    let lines = vec![
+        uncommitted_file_line("other.txt", "ot"),
+        line(StatusOutputLineData::UncommittedFile {
+            cli_id: Arc::new(CliId::UncommittedHunkOrFile(file)),
+        }),
+    ];
+
+    let cursor = Cursor::select_resolved_target(
+        ResolvedCliIdArg::UncommittedHunkOrFile(Box::new(selected_hunk)),
+        &lines,
+    )
+    .expect("individual hunk target should be supported");
+
+    assert_eq!(
+        cursor,
+        Some(Cursor(1)),
+        "the row containing the selected hunk is selected"
+    );
+}
+
 fn markable(cli_id: &Arc<CliId>) -> MarkableRef<'_> {
     MarkableRef::try_from_cli_id(cli_id).expect("test cli ID should be markable")
 }
@@ -199,10 +266,7 @@ fn commit_line_with_classification(
 
 fn move_commit_mode(hex: &str) -> Mode {
     Mode::Move(MoveMode {
-        source: Arc::new(MoveSource::Commit(CommitId {
-            commit_id: commit_id(hex),
-            change_id: None,
-        })),
+        source: Arc::new(MoveSource::Commit(commit_id(hex))),
         insert_side: InsertSide::Below,
     })
 }
@@ -337,7 +401,7 @@ fn restore_returns_matching_uncommitted_file_after_its_hunks_change() {
     assert_eq!(
         Cursor::restore(&selected_cli_id, &lines),
         Some(Cursor(0)),
-        "the file path and assignment should identify a whole file as its hunks change"
+        "the file path should identify a whole file as its hunks change"
     );
 }
 
@@ -397,7 +461,7 @@ fn select_finds_commit_line_by_object_id() {
     ];
 
     assert_eq!(
-        Cursor::select_commit(commit_id(wanted), &lines),
+        Cursor::select_commit(commit_id(wanted).commit_id, &lines),
         Some(Cursor(1))
     );
 }
@@ -412,7 +476,7 @@ fn select_returns_none_when_commit_is_missing() {
 
     assert_eq!(
         Cursor::select_commit(
-            commit_id("2222222222222222222222222222222222222222"),
+            commit_id("2222222222222222222222222222222222222222").commit_id,
             &lines
         ),
         None
@@ -436,7 +500,7 @@ fn select_uses_first_matching_commit_when_object_id_appears_multiple_times() {
     ];
 
     assert_eq!(
-        Cursor::select_commit(commit_id(wanted), &lines),
+        Cursor::select_commit(commit_id(wanted).commit_id, &lines),
         Some(Cursor(0))
     );
 }
@@ -464,7 +528,7 @@ fn select_after_discarded_commit_selects_commit_below_when_on_top_commit() {
 
     assert!(matches!(
         Cursor(1).select_after_discarded_commit(&lines),
-        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(below)
+        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(below).commit_id
     ));
 }
 
@@ -491,7 +555,7 @@ fn select_after_discarded_commit_selects_commit_above_when_on_bottom_commit() {
 
     assert!(matches!(
         Cursor(2).select_after_discarded_commit(&lines),
-        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(above)
+        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(above).commit_id
     ));
 }
 
@@ -546,7 +610,7 @@ fn select_after_discarded_commit_selects_commit_below_when_on_middle_commit() {
 
     assert!(matches!(
         Cursor(2).select_after_discarded_commit(&lines),
-        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(below)
+        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(below).commit_id
     ));
 }
 
@@ -572,8 +636,8 @@ fn select_after_discarded_commits_keeps_unmarked_current_commit_selected() {
     ];
 
     assert!(matches!(
-        Cursor(2).select_after_discarded_commits(&lines, &[commit_id(marked)]),
-        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(current)
+        Cursor(2).select_after_discarded_commits(&lines, &[commit_id(marked).commit_id]),
+        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(current).commit_id
     ));
 }
 
@@ -605,8 +669,11 @@ fn select_after_discarded_commits_skips_marked_commit_below() {
     ];
 
     assert!(matches!(
-        Cursor(1).select_after_discarded_commits(&lines, &[commit_id(top), commit_id(marked)]),
-        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(below)
+        Cursor(1).select_after_discarded_commits(
+            &lines,
+            &[commit_id(top).commit_id, commit_id(marked).commit_id],
+        ),
+        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(below).commit_id
     ));
 }
 
@@ -638,8 +705,11 @@ fn select_after_discarded_commits_selects_commit_above_when_no_unmarked_commit_b
     ];
 
     assert!(matches!(
-        Cursor(2).select_after_discarded_commits(&lines, &[commit_id(marked), commit_id(bottom)]),
-        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(above)
+        Cursor(2).select_after_discarded_commits(
+            &lines,
+            &[commit_id(marked).commit_id, commit_id(bottom).commit_id],
+        ),
+        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(above).commit_id
     ));
 }
 
@@ -665,7 +735,10 @@ fn select_after_discarded_commits_selects_branch_when_all_commits_in_section_are
     ];
 
     assert!(matches!(
-        Cursor(1).select_after_discarded_commits(&lines, &[commit_id(top), commit_id(bottom)]),
+        Cursor(1).select_after_discarded_commits(
+            &lines,
+            &[commit_id(top).commit_id, commit_id(bottom).commit_id],
+        ),
         Some(SelectAfterReload::CliId(cli_id))
             if matches!(&*cli_id, CliId::Branch(BranchId { id, .. }) if id == "b0")
     ));
@@ -684,7 +757,7 @@ fn select_after_discarded_marks_keeps_unmarked_current_commit_selected() {
 
     assert!(matches!(
         Cursor(2).select_after_discarded_marks(&lines, &discarded_marks),
-        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(current)
+        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(current).commit_id
     ));
 }
 
@@ -791,7 +864,7 @@ fn select_after_discarded_marks_selects_commit_below_marked_commit() {
 
     assert!(matches!(
         Cursor(1).select_after_discarded_marks(&lines, &discarded_marks),
-        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(below)
+        Some(SelectAfterReload::Commit(target_commit_id)) if target_commit_id == commit_id(below).commit_id
     ));
 }
 
@@ -949,7 +1022,7 @@ fn select_first_file_in_commit_finds_first_file_for_matching_commit() {
     ];
 
     assert_eq!(
-        Cursor::select_first_file_in_commit(commit_id(wanted), &lines),
+        Cursor::select_first_file_in_commit(commit_id(wanted).commit_id, &lines),
         Some(Cursor(1))
     );
 }
@@ -962,7 +1035,7 @@ fn select_first_file_in_commit_returns_none_when_commit_file_is_missing() {
     })];
 
     assert_eq!(
-        Cursor::select_first_file_in_commit(commit_id(wanted), &lines),
+        Cursor::select_first_file_in_commit(commit_id(wanted).commit_id, &lines),
         None
     );
 }
@@ -980,7 +1053,7 @@ fn select_first_file_in_commit_uses_first_matching_file_when_multiple_exist() {
     ];
 
     assert_eq!(
-        Cursor::select_first_file_in_commit(commit_id(wanted), &lines),
+        Cursor::select_first_file_in_commit(commit_id(wanted).commit_id, &lines),
         Some(Cursor(0))
     );
 }

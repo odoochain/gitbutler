@@ -10,7 +10,7 @@ use crate::{
     CliId, CliResultExt,
     args::atoms::{AllowMergedArg, BranchArg, ResolvedCliIdArgRef},
     command::legacy::{
-        reword2::RewordCommitOperation,
+        reword2::CommitMessageSource,
         squash::{
             self, HowToRewordTarget, ResolvedSquashArgsRef, SquashOperation, SquashOutcome,
             SquashTarget, resolve_target,
@@ -100,7 +100,8 @@ impl SquashSource {
             | SquashRoute::CommittedFileToBranch { .. }
             | SquashRoute::BranchToSelf { .. } => "squash",
             SquashRoute::CommittedFileToUncommitted { .. }
-            | SquashRoute::CommitToUncommitted { .. } => "uncommit",
+            | SquashRoute::CommitToUncommitted { .. }
+            | SquashRoute::BranchToUncommitted { .. } => "uncommit",
         })
     }
 
@@ -179,6 +180,9 @@ enum SquashRoute<'a> {
     BranchToBranch {
         sources: NonEmptyRef<'a, BranchId>,
         target: &'a str,
+    },
+    BranchToUncommitted {
+        sources: NonEmptyRef<'a, BranchId>,
     },
     BranchToSelf {
         source: &'a BranchId,
@@ -305,15 +309,16 @@ impl App {
                         selection,
                     ))));
                 }
-                Marks::Hunks(hunks) => {
-                    self.start_with_source(SquashSource::Marks(SquashMarks::Hunks(hunks.clone())))
-                }
-                Marks::Commits(commits) => self
-                    .start_with_source(SquashSource::Marks(SquashMarks::Commits(commits.clone()))),
-                Marks::CommittedFiles(files) => self.start_with_source(SquashSource::Marks(
+                Marks::Hunks(hunks) => self.squash_start_with_source(SquashSource::Marks(
+                    SquashMarks::Hunks(hunks.clone()),
+                )),
+                Marks::Commits(commits) => self.squash_start_with_source(SquashSource::Marks(
+                    SquashMarks::Commits(commits.clone()),
+                )),
+                Marks::CommittedFiles(files) => self.squash_start_with_source(SquashSource::Marks(
                     SquashMarks::CommittedFiles(files.clone()),
                 )),
-                Marks::Branches(branches) => self.start_with_source(SquashSource::Marks(
+                Marks::Branches(branches) => self.squash_start_with_source(SquashSource::Marks(
                     SquashMarks::Branches(branches.clone()),
                 )),
             },
@@ -345,26 +350,28 @@ impl App {
             },
             Mode::Commit(commit_mode) => match &*commit_mode.source {
                 CommitSource::Uncommitted => {
-                    self.start_with_source(SquashSource::Uncommitted);
+                    self.squash_start_with_source(SquashSource::Uncommitted);
                 }
                 CommitSource::UncommittedHunk(hunk) => {
-                    self.start_with_source(SquashSource::UncommittedHunk(hunk.clone()));
+                    self.squash_start_with_source(SquashSource::UncommittedHunk(hunk.clone()));
                 }
                 CommitSource::Marks(hunks) => {
-                    self.start_with_source(SquashSource::Marks(SquashMarks::Hunks(hunks.clone())));
+                    self.squash_start_with_source(SquashSource::Marks(SquashMarks::Hunks(
+                        hunks.clone(),
+                    )));
                 }
             },
             Mode::Move(move_mode) => match &*move_mode.source {
                 MoveSource::Marks(commits) => {
-                    self.start_with_source(SquashSource::Marks(SquashMarks::Commits(
+                    self.squash_start_with_source(SquashSource::Marks(SquashMarks::Commits(
                         commits.clone(),
                     )));
                 }
                 MoveSource::Commit(commit) => {
-                    self.start_with_source(SquashSource::Commit(commit.clone()));
+                    self.squash_start_with_source(SquashSource::Commit(commit.clone()));
                 }
                 MoveSource::Branch(branch) => {
-                    self.start_with_source(SquashSource::Branch(branch.clone()));
+                    self.squash_start_with_source(SquashSource::Branch(branch.clone()));
                 }
             },
             _ => {}
@@ -374,22 +381,22 @@ impl App {
     fn handle_squash_start_with(&mut self, source: Arc<CliId>) {
         match &*source {
             CliId::Uncommitted { .. } => {
-                self.start_with_source(SquashSource::Uncommitted);
+                self.squash_start_with_source(SquashSource::Uncommitted);
             }
             CliId::Branch(branch) => {
-                self.start_with_source(SquashSource::Branch(branch.clone()));
+                self.squash_start_with_source(SquashSource::Branch(branch.clone()));
             }
             CliId::Commit { commit, id: _ } => {
-                self.start_with_source(SquashSource::Commit(commit.clone()));
+                self.squash_start_with_source(SquashSource::Commit(commit.clone()));
             }
             CliId::UncommittedHunkOrFile(hunk) => {
-                self.start_with_source(SquashSource::UncommittedHunk(hunk.clone()));
+                self.squash_start_with_source(SquashSource::UncommittedHunk(hunk.clone()));
             }
             CliId::CommittedFile {
                 committed_file,
                 id: _,
             } => {
-                self.start_with_source(SquashSource::CommittedFile(committed_file.clone()));
+                self.squash_start_with_source(SquashSource::CommittedFile(committed_file.clone()));
             }
             CliId::PathPrefix { .. } | CliId::Stack { .. } => {}
         }
@@ -412,10 +419,10 @@ impl App {
             return;
         }
 
-        self.start_with_source(SquashSource::Uncommitted);
+        self.squash_start_with_source(SquashSource::Uncommitted);
     }
 
-    fn start_with_source(&mut self, source: SquashSource) {
+    fn squash_start_with_source(&mut self, source: SquashSource) {
         self.mode
             .update_and_push_leave_normal_mode(&mut self.backstack, |mode| {
                 *mode = Mode::Squash(SquashMode {
@@ -496,9 +503,9 @@ impl App {
             | SquashOutcome::Hunks { new_commit, .. } => {
                 SelectAfterReload::Commit(new_commit.commit_id)
             }
-            SquashOutcome::Uncommit { .. } | SquashOutcome::UncommitHunk { .. } => {
-                SelectAfterReload::Uncommitted
-            }
+            SquashOutcome::UncommitCommit { .. }
+            | SquashOutcome::UncommitHunk { .. }
+            | SquashOutcome::UncommitBranch { .. } => SelectAfterReload::Uncommitted,
         };
 
         drop(_suspend_guard);
@@ -534,7 +541,9 @@ fn resolve_squash_operation<'a>(
     };
 
     let reword = match reword {
-        SquashReword::Infer => HowToRewordTarget::Reword(RewordCommitOperation::UseEditor),
+        SquashReword::Infer => {
+            HowToRewordTarget::Reword(CommitMessageSource::Editor { initial: None })
+        }
         SquashReword::UseTarget => HowToRewordTarget::UseTargetMessage,
     };
 
@@ -638,6 +647,13 @@ fn resolve_squash_operation<'a>(
             sources: sources
                 .iter()
                 .map(ResolvedCliIdArgRef::CommittedFile)
+                .collect(),
+            target: SquashTarget::Uncommitted,
+        },
+        SquashRoute::BranchToUncommitted { sources } => ResolvedSquashArgsRef::Normal {
+            sources: sources
+                .iter()
+                .map(|branch| ResolvedCliIdArgRef::Branch(&branch.name))
                 .collect(),
             target: SquashTarget::Uncommitted,
         },
@@ -773,6 +789,9 @@ fn squash_route_from_branch<'a>(
             CliId::Branch(branch) => Some(SquashRoute::BranchToBranch {
                 sources: source_branches,
                 target: &branch.name,
+            }),
+            CliId::Uncommitted { .. } => Some(SquashRoute::BranchToUncommitted {
+                sources: source_branches,
             }),
             _ => None,
         }

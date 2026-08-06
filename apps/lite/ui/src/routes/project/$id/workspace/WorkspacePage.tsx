@@ -7,6 +7,7 @@ import {
 	treeChangeDiffsQueryOptions,
 } from "#ui/api/queries.ts";
 import { useRestoreSnapshot } from "#ui/api/mutations.ts";
+import { decodeBytes } from "#ui/api/bytes.ts";
 import {
 	focusHorizontalSelectionScope,
 	focusSelectionScope,
@@ -46,6 +47,7 @@ import {
 } from "#ui/operands.ts";
 import { Details, type DiffViewerHandle } from "./Details.tsx";
 import { getDiffFileNavigation } from "./diff-view.ts";
+import { pathMatchesFilter } from "./file-row.ts";
 import styles from "./WorkspacePage.module.css";
 import { useActiveElement } from "#ui/focus.ts";
 import { ApplyBranchPicker } from "./ApplyBranchPicker.tsx";
@@ -58,6 +60,7 @@ import { OperationControls } from "#ui/routes/project/$id/workspace/OperationCon
 import { WorkspacePageErrorBoundary } from "./WorkspacePageErrorBoundary.tsx";
 import { Settings } from "./Settings.tsx";
 import { useBranchesOutline } from "./useBranchesOutline.ts";
+import { useUpstreamOutline } from "./useUpstreamOutline.ts";
 import type { OutlineMode } from "#ui/outline/mode.ts";
 import { useStateReconciler as useReconcileState } from "#ui/reconcile.ts";
 import { defaultSettings } from "#ui/settings.ts";
@@ -168,6 +171,15 @@ const useWorkspaceHotkeys = (projectId: string) => {
 					},
 				},
 			]),
+			Match.when("upstream", () => [
+				{
+					hotkey: "1",
+					callback: () => focusSelectionScope("outline"),
+					options: {
+						enabled: outlineVisible,
+					},
+				},
+			]),
 			Match.exhaustive,
 		),
 		{
@@ -222,10 +234,15 @@ const hasAnyOperation = (sources: Array<Operand>, target: Operand) => {
 
 const buildUncommittedFilesNavigationIndex = ({
 	worktreeChanges,
+	filter,
 }: {
 	worktreeChanges: WorktreeChanges | undefined;
+	filter: string | null;
 }): NavigationIndex<string> => {
-	const items = worktreeChanges?.changes.map((change) => change.path) ?? [];
+	const items =
+		worktreeChanges?.changes.flatMap((change) =>
+			pathMatchesFilter(change.path, filter) ? change.path : [],
+		) ?? [];
 	return { items, indexByKey: buildIndexByKey(items, (path) => path) };
 };
 
@@ -233,26 +250,32 @@ const buildOutlineNavigationIndex = ({
 	headInfo,
 	outlineMode,
 	absorptionTargetCommitIds,
+	foldedSegments,
 }: {
 	headInfo: RefInfo | undefined;
 	outlineMode: OutlineMode;
 	absorptionTargetCommitIds: ReadonlySet<string>;
+	foldedSegments: Record<string, true>;
 }): NavigationIndex<Operand> => {
 	const allItems = (): Array<Operand> =>
-		headInfo?.stacks
-			.toReversed()
-			.flatMap((stack) =>
-				stack.segments.flatMap(
-					(segment): Array<Operand> => [
-						...(segment.refName
-							? [branchOperand({ branchRef: segment.refName.fullNameBytes })]
-							: []),
-						...segment.commits.map((commit) =>
-							commitOperand({ commitId: commit.id, changeId: commit.changeId }),
-						),
-					],
-				),
-			) ?? [];
+		headInfo?.stacks.toReversed().flatMap((stack) =>
+			stack.segments.flatMap((segment): Array<Operand> => {
+				// Matches what OutlineTree renders: a folded segment shows a stub
+				// in place of its commits, so they are not navigable.
+				const folded =
+					segment.refName !== null &&
+					foldedSegments[decodeBytes(segment.refName.fullNameBytes)] === true;
+
+				return [
+					...(segment.refName ? [branchOperand({ branchRef: segment.refName.fullNameBytes })] : []),
+					...(folded
+						? []
+						: segment.commits.map((commit) =>
+								commitOperand({ commitId: commit.id, changeId: commit.changeId }),
+							)),
+				];
+			}),
+		) ?? [];
 
 	const filteredItems = Match.value(outlineMode).pipe(
 		Match.tagsExhaustive({
@@ -458,16 +481,21 @@ const WorkspacePage: FC = () => {
 		absorptionPlanQuery?.data?.map(({ commitId }) => commitId),
 	);
 
+	const foldedSegments = useAppSelector((state) =>
+		projectSlice.selectors.selectFoldedSegments(state, projectId),
+	);
 	const outlineNavigationIndex = buildOutlineNavigationIndex({
 		headInfo,
 		outlineMode,
 		absorptionTargetCommitIds,
+		foldedSegments,
 	});
 
 	const outlineTab = useAppSelector((state) =>
 		projectSlice.selectors.selectOutlineTab(state, projectId),
 	);
 	const branchesOutline = useBranchesOutline(projectId);
+	const upstreamOutline = useUpstreamOutline(projectId);
 
 	const outlineSelection = useAppSelector((state) =>
 		projectSlice.selectors.selectSelectionOutline(state, projectId, outlineNavigationIndex),
@@ -479,9 +507,22 @@ const WorkspacePage: FC = () => {
 			branchesOutline.navigationIndex,
 		),
 	);
+	const upstreamSelection = useAppSelector((state) =>
+		projectSlice.selectors.selectSelectionUpstream(
+			state,
+			projectId,
+			upstreamOutline.navigationIndex,
+		),
+	);
 
 	const { data: worktreeChanges } = useQuery(changesInWorktreeQueryOptions(projectId));
-	const uncommittedFilesNavigationIndex = buildUncommittedFilesNavigationIndex({ worktreeChanges });
+	const uncommittedFilesFilter = useAppSelector((state) =>
+		projectSlice.selectors.selectUncommittedFilesFilter(state, projectId),
+	);
+	const uncommittedFilesNavigationIndex = buildUncommittedFilesNavigationIndex({
+		worktreeChanges,
+		filter: uncommittedFilesFilter,
+	});
 	const uncommittedTreeChangeDiffs = useQueries({
 		queries:
 			worktreeChanges?.changes.map((change) =>
@@ -495,9 +536,11 @@ const WorkspacePage: FC = () => {
 	});
 
 	const onActiveUncommittedFileSelection = (selection: string) => {
-		const index = uncommittedFilesNavigationIndex.indexByKey.get(selection);
-		const change = index !== undefined ? worktreeChanges?.changes[index] : undefined;
-		const treeChangeDiff = index !== undefined ? uncommittedTreeChangeDiffs?.[index] : undefined;
+		// Indexed against the worktree changes rather than the navigation index,
+		// which the file filter can narrow out from under them.
+		const index = worktreeChanges?.changes.findIndex((change) => change.path === selection) ?? -1;
+		const change = index === -1 ? undefined : worktreeChanges?.changes[index];
+		const treeChangeDiff = index === -1 ? undefined : uncommittedTreeChangeDiffs?.[index];
 		const navigation =
 			change && treeChangeDiff !== undefined
 				? getDiffFileNavigation({
@@ -523,7 +566,14 @@ const WorkspacePage: FC = () => {
 		projectSlice.selectors.selectDetailsSelectionScope(state, projectId),
 	);
 	const detailsSelection = Match.value(detailsSelectionScope).pipe(
-		Match.when("outline", () => (outlineTab === "branches" ? branchesSelection : outlineSelection)),
+		Match.when("outline", () =>
+			Match.value(outlineTab).pipe(
+				Match.when("workspace", () => outlineSelection),
+				Match.when("upstream", () => upstreamSelection),
+				Match.when("branches", () => branchesSelection),
+				Match.exhaustive,
+			),
+		),
 		Match.when("uncommitted-files", () =>
 			uncommittedFilesSelection === null
 				? null
@@ -577,6 +627,7 @@ const WorkspacePage: FC = () => {
 							projectId={projectId}
 							project={selectedProject}
 							branchesOutline={branchesOutline}
+							upstreamOutline={upstreamOutline}
 							navigationIndex={outlineNavigationIndex}
 							uncommittedFilesNavigationIndex={uncommittedFilesNavigationIndex}
 							absorptionTargetCommitIds={absorptionTargetCommitIds}

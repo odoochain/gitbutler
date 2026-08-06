@@ -59,6 +59,7 @@ import {
 	type PeelRestoreSnapshotParams,
 	type WorkspaceFetchFromRemotesParams,
 	type WorkspaceIntegrateUpstreamParams,
+	type WorkspaceTargetCommitsParams,
 	type UpdateReviewFootersParams,
 } from "./ipc.js";
 import {
@@ -131,6 +132,7 @@ import {
 	warmCiChecksCache,
 	workspaceFetchFromRemotes,
 	workspaceFetchStatus,
+	workspaceTargetCommits,
 	workspaceIntegrateUpstream,
 	askpassInit,
 	askpassSubmitPromptResponse,
@@ -279,8 +281,9 @@ const configureAskpass = (): void => {
 	}
 };
 
-// Dev-only runtime icons path (packaged builds rely on electron-builder icons).
-const iconsPath = path.join(currentDirPath, "../../resources/icons");
+// Dev-only runtime icons path. Packaged builds rely on electron-builder, which uses the release
+// icons under `resources/icons`, so dev gets a visually distinct set of its own.
+const iconsPath = path.join(currentDirPath, "../../resources/icons-dev");
 
 function getWindowIcon(): string | undefined {
 	if (app.isPackaged) return undefined;
@@ -417,7 +420,7 @@ const registerIpcHandlers = (): void => {
 		branchList(projectId),
 	);
 	senderValidatingHandle(liteIpcChannels.changesInWorktree, (_e, projectId: string) =>
-		changesInWorktree(projectId, true),
+		changesInWorktree(projectId, { type: "head" }, true),
 	);
 	senderValidatingHandle(liteIpcChannels.clipboardWriteText, (_e, text: string) => {
 		clipboard.writeText(text, "clipboard");
@@ -741,6 +744,11 @@ const registerIpcHandlers = (): void => {
 	);
 	senderValidatingHandle(liteIpcChannels.workspaceFetchStatus, (_e, projectId: string) =>
 		workspaceFetchStatus(projectId),
+	);
+	senderValidatingHandle(
+		liteIpcChannels.workspaceTargetCommits,
+		(_e, { projectId, from, limit }: WorkspaceTargetCommitsParams) =>
+			workspaceTargetCommits(projectId, from, limit),
 	);
 	senderValidatingHandle(
 		liteIpcChannels.workspaceIntegrateUpstream,

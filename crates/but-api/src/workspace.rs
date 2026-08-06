@@ -373,7 +373,7 @@ pub fn rebase_stack_bottoms(head_info: &but_workspace::RefInfo) -> Vec<BottomUpd
         .collect()
 }
 
-fn target_branch_name(
+pub(crate) fn target_branch_name(
     symbolic_remote_names: &[String],
     project_meta: &but_core::ref_metadata::ProjectMeta,
 ) -> Option<String> {
@@ -575,7 +575,7 @@ pub fn workspace_integrate_upstream_only_with_perm(
             });
         }
 
-        let materialized = rebase.materialize()?;
+        let materialized = rebase.materialize(Default::default())?;
         project_meta.persist(&repo)?;
 
         if let Some(ref_name) = materialized.workspace.ref_name()

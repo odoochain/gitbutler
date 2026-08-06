@@ -132,8 +132,6 @@ impl Subcommands {
                 Some(branch::Subcommands::Show { .. }) => BranchShow,
                 Some(branch::Subcommands::Update { .. }) => BranchUpdate,
                 Some(branch::Subcommands::Move { .. }) => BranchMove,
-                #[cfg(not(feature = "legacy"))]
-                Some(branch::Subcommands::Apply { .. }) => BranchApply,
             },
             #[cfg(feature = "legacy")]
             Subcommands::Unapply { .. } => BranchUnapply,
@@ -149,7 +147,7 @@ impl Subcommands {
             #[cfg(feature = "legacy")]
             Subcommands::Push(_) => Push,
             #[cfg(feature = "legacy")]
-            Subcommands::Reword { .. } => Reword,
+            Subcommands::Reword { .. } | Subcommands::_Reword2(..) => Reword,
             #[cfg(feature = "legacy")]
             Subcommands::Oplog(crate::args::oplog::Platform { cmd }) => match cmd {
                 None => OplogList,
@@ -158,9 +156,9 @@ impl Subcommands {
                 Some(crate::args::oplog::Subcommands::Restore { .. }) => Restore,
             },
             #[cfg(feature = "legacy")]
-            Subcommands::Undo => Undo,
+            Subcommands::Undo(..) => Undo,
             #[cfg(feature = "legacy")]
-            Subcommands::Redo => Redo,
+            Subcommands::Redo(..) => Redo,
             #[cfg(feature = "legacy")]
             Subcommands::Absorb { .. } => Absorb,
             #[cfg(feature = "legacy")]
@@ -352,6 +350,10 @@ impl Props {
                     props.insert("badInputArgName", arg_name);
                 }
                 props.insert("badInputHasHint", bad_input.has_hint());
+            }
+            CliError::CommandRejection => {
+                props.insert("error", "Command rejection");
+                props.insert("errorKind", "commandRejection");
             }
             CliError::ExternalCommandNotFound(command_name) => {
                 props.insert("error", "Unrecognized subcommand");

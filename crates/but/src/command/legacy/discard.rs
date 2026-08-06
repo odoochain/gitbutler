@@ -188,7 +188,11 @@ impl CliOutputHuman for DiscardOutcome {
 impl CliOutput for DiscardOutcome {
     fn on_json(self) -> impl Serialize {
         #[derive(Serialize)]
-        #[serde(untagged, rename_all_fields = "camelCase")]
+        #[serde(
+            tag = "type",
+            rename_all = "camelCase",
+            rename_all_fields = "camelCase"
+        )]
         enum Output {
             Branches {
                 branches: Vec<String>,
@@ -254,7 +258,7 @@ pub fn discard(
 ) -> CliResult<DiscardOutcome> {
     let mut guard = ctx.exclusive_worktree_access();
     let mut meta = ctx.meta()?;
-    let id_map = IdMap::new_from_context(ctx, None, guard.read_permission())?;
+    let id_map = IdMap::new_from_context(ctx, guard.read_permission())?;
     let operation = {
         let repo = ctx.repo.get()?;
         resolve(&repo, &id_map, args)?
@@ -287,7 +291,7 @@ fn resolve(repo: &gix::Repository, id_map: &IdMap, args: Platform) -> CliResult<
             ResolvedCliIdArg::PathPrefix { id: _, hunks } => {
                 uncommitted_change_sources.push(UncommittedDiscardSource::PathPrefix(hunks))
             }
-            ResolvedCliIdArg::Stack => {
+            ResolvedCliIdArg::Stack { .. } => {
                 return Err(bad_input("Stacks cannot be discarded")
                     .arg_name("<CHANGES>")
                     .arg_value(value)
@@ -395,9 +399,8 @@ pub fn run(
         DiscardOperation::CommittedFiles { source, paths } => {
             let changes = {
                 let context_lines = ctx.settings.context_lines;
-                let (repo, workspace, mut db) =
-                    ctx.workspace_and_db_mut_with_perm(perm.read_permission())?;
-                let mut builder = DiffSpecBuilder::new(&mut db, &repo, &workspace, context_lines);
+                let (repo, ..) = ctx.workspace_and_db_mut_with_perm(perm.read_permission())?;
+                let mut builder = DiffSpecBuilder::new(&repo, context_lines);
                 for path in &paths {
                     builder.push_changes_from_committed_file(source.commit_id, path.as_bstr())?;
                 }
@@ -413,9 +416,8 @@ pub fn run(
         DiscardOperation::Uncommitted(selection) => {
             let changes = {
                 let context_lines = ctx.settings.context_lines;
-                let (repo, workspace, mut db) =
-                    ctx.workspace_and_db_mut_with_perm(perm.read_permission())?;
-                let mut builder = DiffSpecBuilder::new(&mut db, &repo, &workspace, context_lines);
+                let (repo, ..) = ctx.workspace_and_db_mut_with_perm(perm.read_permission())?;
+                let mut builder = DiffSpecBuilder::new(&repo, context_lines);
                 match selection {
                     UncommittedSelection::All => builder.push_changes_from_uncommitted_area()?,
                     UncommittedSelection::Changes(changes) => {

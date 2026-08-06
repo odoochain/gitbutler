@@ -42,18 +42,15 @@ pub enum Subcommands {
         anchor: Option<CliIdArg>,
     },
 
-    /// Deletes a branch from the workspace
-    ///
-    /// This will remove the branch and all its commits from the workspace.
-    /// If the branch has unpushed commits, you will be prompted for confirmation
-    /// unless the `--force` flag is used.
+    /// Delete branchs from the workspace
     ///
     #[cfg(feature = "legacy")]
     #[clap(short_flag = 'd')]
     #[cfg_attr(feature = "raw-clap-docs", clap(verbatim_doc_comment))]
     Delete {
-        /// Name of the branch to delete
-        branch_name: CliIdArg,
+        /// One or more branches to delete.
+        #[clap(required = true)]
+        branches: Vec<CliIdArg>,
     },
 
     /// List the branches in the repository
@@ -139,21 +136,6 @@ pub enum Subcommands {
     Move {
         #[clap(trailing_var_arg = true, allow_hyphen_values = true)]
         _args: Vec<String>,
-    },
-
-    /// Apply a branch to the workspace (non-legacy path)
-    ///
-    /// If you want to apply an unapplied branch to your workspace so you
-    /// can work on it, you can run `but branch apply <branch-name>`.
-    ///
-    /// This will apply the changes in that branch into your working directory
-    /// as a parallel applied branch.
-    ///
-    #[cfg(not(feature = "legacy"))]
-    #[cfg_attr(feature = "raw-clap-docs", clap(verbatim_doc_comment))]
-    Apply {
-        /// Name of the branch to apply
-        branch_name: String,
     },
 
     /// Update your local branch with the content of its remote counterpart.

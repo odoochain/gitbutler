@@ -22,8 +22,8 @@ use crate::{
             BranchLineContent, StatusOutputContent, StatusOutputLineData, UncommittedLineContent,
         },
         tui::app::{
-            CommitMessageComposer, CommitMode, JumpMode, MoveMode, MoveSource, MoveStackMode,
-            StackMode, find_jump_match,
+            CherryPickMode, CommitMessageComposer, CommitMode, JumpMode, MoveMode, MoveSource,
+            MoveStackMode, StackMode, find_jump_match,
         },
     },
     id::{CommitId, CommittedFileId},
@@ -495,7 +495,7 @@ fn render_status_list_item(
     } = tui_line;
 
     let operation_extension = if is_selected {
-        selected_operation_extension(app, data)
+        app.mode.as_mode_render().operation_extension(data)
     } else {
         None
     };
@@ -681,7 +681,7 @@ fn render_status_list_item(
                         textarea,
                         commit_id: source,
                     }) = &*app.mode
-                    && commit_id == source
+                    && *commit_id == source.commit_id
                 {
                     line.render(Span::raw(" "));
                     line.render_textarea(textarea);
@@ -717,7 +717,7 @@ fn render_status_list_item(
                         name: source,
                         ..
                     }) = &*app.mode
-                    && branch.name == *source
+                    && branch.name == source.shorten()
                 {
                     line.render_textarea(textarea);
                 } else {
@@ -801,9 +801,13 @@ fn render_status_list_item(
 }
 
 #[derive(Clone, Copy)]
-enum OperationExtension<'a> {
+pub(crate) enum OperationExtension<'a> {
     Commit {
         mode: &'a CommitMode,
+        direction: ExtensionDirection,
+    },
+    CherryPick {
+        mode: &'a CherryPickMode,
         direction: ExtensionDirection,
     },
     Move {
@@ -815,67 +819,10 @@ enum OperationExtension<'a> {
 impl OperationExtension<'_> {
     const fn direction(self) -> ExtensionDirection {
         match self {
-            Self::Commit { direction, .. } | Self::Move { direction, .. } => direction,
+            Self::Commit { direction, .. }
+            | Self::Move { direction, .. }
+            | Self::CherryPick { direction, .. } => direction,
         }
-    }
-}
-
-fn selected_operation_extension<'a>(
-    app: &'a App,
-    data: &StatusOutputLineData,
-) -> Option<OperationExtension<'a>> {
-    match &*app.mode {
-        Mode::Commit(mode) => {
-            if matches!(data, StatusOutputLineData::Commit { .. }) {
-                Some(OperationExtension::Commit {
-                    mode,
-                    direction: mode.insert_side.into(),
-                })
-            } else if matches!(data, StatusOutputLineData::Branch { .. }) {
-                Some(OperationExtension::Commit {
-                    mode,
-                    direction: ExtensionDirection::Below,
-                })
-            } else {
-                None
-            }
-        }
-        Mode::Move(mode) => {
-            if let StatusOutputLineData::Commit { cli_id: target, .. } = data
-                && !mode.source.contains(target)
-            {
-                Some(OperationExtension::Move {
-                    mode,
-                    direction: mode.insert_side.into(),
-                })
-            } else if let StatusOutputLineData::Branch { cli_id: target, .. } = data
-                && !mode.source.contains(target)
-            {
-                let source_is_commit = match &*mode.source {
-                    MoveSource::Marks(..) | MoveSource::Commit { .. } => true,
-                    MoveSource::Branch(..) => false,
-                };
-                Some(OperationExtension::Move {
-                    mode,
-                    direction: if source_is_commit {
-                        ExtensionDirection::Below
-                    } else {
-                        ExtensionDirection::Above
-                    },
-                })
-            } else {
-                None
-            }
-        }
-        Mode::Normal(..)
-        | Mode::MoveStack(..)
-        | Mode::PickChanges(..)
-        | Mode::Details(..)
-        | Mode::Squash(..)
-        | Mode::Stack(..)
-        | Mode::InlineReword(..)
-        | Mode::Jump(..)
-        | Mode::Command(..) => None,
     }
 }
 
@@ -903,6 +850,9 @@ fn render_operation_extension_line(
     match extension {
         OperationExtension::Commit { mode, .. } => {
             render_commit_operation_target_marker(app, data, mode, &mut line);
+        }
+        OperationExtension::CherryPick { mode, .. } => {
+            render_cherry_pick_operation_target_marker(app, data, mode, &mut line);
         }
         OperationExtension::Move { mode, .. } => {
             render_move_operation_target_marker(app, data, mode, &mut line);
@@ -984,6 +934,33 @@ pub(crate) fn render_move_operation_target_marker(
             Span::raw(" "),
         ]);
     } else if let Some(display) = move_operation_display(data, mode) {
+        line.extend([
+            Span::raw("<< ").mode_colors(&*app.mode, app.theme),
+            Span::raw(display).mode_colors(&*app.mode, app.theme),
+            Span::raw(" >>").mode_colors(&*app.mode, app.theme),
+            Span::raw(" "),
+        ]);
+    }
+}
+
+pub(crate) fn render_cherry_pick_operation_target_marker(
+    app: &App,
+    data: &StatusOutputLineData,
+    mode: &CherryPickMode,
+    line: &mut RenderSingleLineSpans<'_, '_>,
+) {
+    if data
+        .cli_id()
+        .is_some_and(|target| mode.source.contains(target))
+    {
+        line.extend([source_span(app.theme), Span::raw(" ")]);
+        line.extend([
+            Span::raw("<< ").mode_colors(&*app.mode, app.theme),
+            Span::raw(NOOP).mode_colors(&*app.mode, app.theme),
+            Span::raw(" >>").mode_colors(&*app.mode, app.theme),
+            Span::raw(" "),
+        ]);
+    } else if let Some(display) = cherry_pick_operation_display(data, mode) {
         line.extend([
             Span::raw("<< ").mode_colors(&*app.mode, app.theme),
             Span::raw(display).mode_colors(&*app.mode, app.theme),
@@ -1375,6 +1352,35 @@ pub fn stack_operation_display(
     }
 }
 
+pub fn cherry_pick_operation_display(
+    data: &StatusOutputLineData,
+    mode: &CherryPickMode,
+) -> Option<&'static str> {
+    let CherryPickMode { insert_side, .. } = mode;
+    match data {
+        StatusOutputLineData::Branch { .. } => Some("pick to branch"),
+        StatusOutputLineData::Commit { .. } => match insert_side {
+            InsertSide::Above => Some("pick above"),
+            InsertSide::Below => Some("pick below"),
+        },
+        StatusOutputLineData::UpdateNotice
+        | StatusOutputLineData::Connector
+        | StatusOutputLineData::BetweenStacks
+        | StatusOutputLineData::StagedChanges { .. }
+        | StatusOutputLineData::StagedFile { .. }
+        | StatusOutputLineData::UncommittedChanges { .. }
+        | StatusOutputLineData::UncommittedFile { .. }
+        | StatusOutputLineData::CommitMessage
+        | StatusOutputLineData::EmptyCommitMessage
+        | StatusOutputLineData::File { .. }
+        | StatusOutputLineData::MergeBase
+        | StatusOutputLineData::UpstreamChanges
+        | StatusOutputLineData::Warning
+        | StatusOutputLineData::Hint
+        | StatusOutputLineData::NoAssignmentsUnstaged => None,
+    }
+}
+
 pub(crate) fn source_span(theme: &'static Theme) -> Span<'static> {
     Span::raw("<< source >>").mode_colors(ModeDiscriminant::Normal, theme)
 }
@@ -1499,11 +1505,20 @@ impl Mode {
             Mode::MoveStack(mode) => mode,
             Mode::PickChanges(mode) => mode,
             Mode::Jump(mode) => mode,
+            Mode::CherryPick(mode) => mode,
         }
     }
 }
 
-pub trait ModeRender {
+pub(crate) trait ModeRender {
+    // ┊│   << target >>
+    // ┊●   982b7d85c5 my commit
+    // ^^^^^^^^^^^^^^^^^^^^^^^^^ configure an operation extension line above or below the selected row
+    #[allow(unused_variables)]
+    fn operation_extension(&self, data: &StatusOutputLineData) -> Option<OperationExtension<'_>> {
+        None
+    }
+
     // ┊●   << source >> 982b7d85c5 my commit
     //      ^^^^^^^^^^^^ render source labels
     #[allow(unused_variables)]
