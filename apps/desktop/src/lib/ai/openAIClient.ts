@@ -5,6 +5,7 @@ import {
 } from "$lib/ai/prompts";
 import OpenAI from "openai";
 import type {
+	DeepSeekModelName,
 	OpenAIModelName,
 	OpenRouterModelName,
 	Prompt,
@@ -21,11 +22,11 @@ export class OpenAIClient implements AIClient {
 
 	private client: OpenAI;
 	private openAIKey: string;
-	private modelName: OpenAIModelName | OpenRouterModelName;
+	private modelName: OpenAIModelName | OpenRouterModelName | DeepSeekModelName;
 
 	constructor(
 		openAIKey: string,
-		modelName: OpenAIModelName | OpenRouterModelName,
+		modelName: OpenAIModelName | OpenRouterModelName | DeepSeekModelName,
 		baseURL: string | undefined,
 	) {
 		this.openAIKey = openAIKey;

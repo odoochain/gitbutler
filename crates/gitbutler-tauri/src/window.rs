@@ -248,7 +248,7 @@ pub fn create(
     window_relative_url: String,
 ) -> tauri::Result<tauri::WebviewWindow> {
     tracing::info!("creating window '{label}' created at '{window_relative_url}'");
-    let window = tauri::WebviewWindowBuilder::new(
+    let builder = tauri::WebviewWindowBuilder::new(
         handle,
         label,
         tauri::WebviewUrl::App(window_relative_url.into()),
@@ -258,8 +258,28 @@ pub fn create(
     .disable_drag_drop_handler()
     .min_inner_size(1000.0, 600.0)
     .inner_size(1160.0, 720.0)
-    .on_navigation(on_navigate)
-    .build()?;
+    .on_navigation(on_navigate);
+
+    // On Windows, use a dedicated WebView2 data directory to avoid
+    // ERROR_BUSY (0x800700AA) when the default EBWebView directory is locked
+    // or corrupted by other WebView2 applications.
+    #[cfg(target_os = "windows")]
+    let builder = {
+        use tauri::Manager;
+        let data_dir = handle
+            .path()
+            .app_local_data_dir()
+            .ok()
+            .map(|dir| dir.join("webview2-data"));
+        if let Some(dir) = &data_dir {
+            tracing::info!("using WebView2 data directory: {}", dir.display());
+            builder.data_directory(dir.clone())
+        } else {
+            builder
+        }
+    };
+
+    let window = builder.build()?;
     Ok(window)
 }
 
