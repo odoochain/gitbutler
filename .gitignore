@@ -50,6 +50,16 @@ test-results*
 playwright-report
 packages/ui/tests/.cache
 
+# test coverage
+coverage/
+
+# debug screenshots
+gitbutler-screenshot*.png
+release-verify*.png
+
+# local release packages (build-release.ps1)
+/dist/
+
 # storybook
 *storybook.log
 storybook-static
