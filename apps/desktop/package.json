@@ -1,7 +1,7 @@
 {
 	"name": "@gitbutler/desktop",
 	"private": true,
-	"version": "0.0.0",
+	"version": "0.22.0+deepseek",
 	"type": "module",
 	"scripts": {
 		"dev": "vite --clearScreen false",
