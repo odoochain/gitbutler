@@ -95,6 +95,8 @@ but branch new feature -a <anchor>  # Stacked branch (dependent work)
 
 Use parallel branches for independent tasks. Use stacked branches when work depends on another branch.
 
+In single-branch mode (no managed workspace), `but branch new` stacks the new branch above the checked-out branch (or the `-a` anchor). When the new branch lands above the checked-out branch — always the case without an anchor — it is checked out and `HEAD` moves to it.
+
 For "commit these selected changes on a new branch", prefer `but commit -b <branch> -m "message" <ids>` instead of a separate `but branch new` or preflight `but status -fv` — `-b` creates the branch when it does not exist.
 
 ### `but apply <branch-name>`
@@ -436,7 +438,9 @@ project-local and shared with Desktop.
 
 Land a branch directly onto the target (e.g. `origin/master`), skipping a pull request. Fast-forwards
 when possible, otherwise makes a signed merge commit; for a `gb-local` target it moves the refs
-locally. Then reconciles the remaining branches like `but pull`.
+locally. Then reconciles the remaining branches like `but pull`, and deletes each landed branch's
+copy on the push remote (only when fully contained in the landed target), reported as
+`Deleted <remote>/<branch> (landed)`.
 
 ```bash
 but land <branch-id> --yes                  # Land onto the target (--yes required non-interactively)
