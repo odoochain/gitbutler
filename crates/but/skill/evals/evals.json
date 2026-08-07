@@ -1,6 +1,6 @@
 {
   "skill_name": "but",
-  "description": "Behavioral evaluations for the GitButler CLI skill. Each case pairs a natural-language user request with a rubric describing the expected `but` commands and the git commands the agent must NOT use. Commands are verified against the CLI source in crates/but/src/args and crates/but/src/command; see README.md for the verification method and the benefits/risks of this eval set.",
+  "description": "Behavioral evaluations for the GitButler CLI skill. Each case pairs a natural-language user request with a rubric describing the expected `but` commands and the git (or retired `but`) commands the agent must NOT use. Grading rule: a case FAILS if any `must_not_use` fragment appears, even when `must_use` is also satisfied (this catches answers that mix a correct `but` command with a forbidden `git` one). In `must_use`, a plain string must appear; a nested array is an OR group where any one member satisfies it. Commands are verified against the CLI source in crates/but/src/args and crates/but/src/command; see README.md for the verification method and the benefits/risks of this eval set.",
   "evals": [
     {
       "id": 1,
@@ -47,9 +47,8 @@
       "prompt": "I messed up my last commit - the changes are wrong. Undo it completely so the changes go back to being uncommitted.",
       "expected_output": "Agent uses `but uncommit <commit-id>` to move the whole commit's changes back to the uncommitted area, or `but undo` to revert the last operation. May suggest `but oplog` to inspect history first. Does NOT use `but rub <commit> zz` (retired command) or `git reset HEAD~1`.",
       "rubric": {
-        "must_use": ["but uncommit", "but undo"],
-        "must_not_use": ["but rub", "git reset", "git revert"],
-        "note": "must_use lists acceptable alternatives; either `but uncommit <commit-id>` or `but undo` satisfies the case."
+        "must_use": [["but uncommit", "but undo"]],
+        "must_not_use": ["but rub", "git reset", "git revert"]
       },
       "files": []
     },

@@ -29,12 +29,34 @@ evals/
   - `expected_output` - a rubric in prose: the expected `but` commands, why,
     and the `git` (or retired `but`) commands that must not appear.
   - `rubric` - a structured mirror of `expected_output` for automated grading:
-    - `must_use` - command fragments the correct answer should contain.
+    - `must_use` - fragments the correct answer should contain. A plain string
+      must appear; a nested array is an **OR group** where any one member
+      satisfies it (case 5 uses `[["but uncommit", "but undo"]]` because either
+      command is correct).
     - `must_not_use` - fragments that indicate a wrong approach.
-    - `note` - optional; disambiguates cases with multiple valid answers or
-      names the specific failure mode being targeted.
+    - `note` - optional; names the specific failure mode a case targets.
   - `files` - repository fixture (empty here; cases are command-level, not
     workspace-state-dependent).
+
+## Grading rules
+
+The `rubric` fields are only meaningful under these rules. There is no runner in
+the repo (see caveats below), so whoever grades - a person or an external
+harness - must apply them consistently:
+
+1. **`must_not_use` wins.** A case FAILS if any `must_not_use` fragment appears,
+   **even if every `must_use` fragment is also present.** This is what catches
+   an answer that mixes a correct `but` command with a forbidden `git` one
+   (e.g. running `git push` *and* `but push`). Check the negatives first.
+2. **`must_use` is AND-of-OR.** Every top-level entry must be satisfied. A plain
+   string is satisfied by containing it; a nested array is satisfied by any one
+   of its members. This lets a case accept genuine alternatives without
+   accepting wrong answers.
+3. **Match on command tokens, not raw substrings.** Before matching, split the
+   agent's output into command invocations and treat flags as whole tokens, so
+   `-t` does not match inside `--target` or `--status-after`, and `but push`
+   does not match `but push --help`. Fragments in the rubric are written as the
+   normalized tokens they are meant to match.
 
 ## How these cases were verified
 
@@ -76,10 +98,12 @@ set.
 - **They rot faster than prose.** A rubric naming `but pr new` breaks the moment
   the subcommand is renamed. Unlike `SKILL.md`, an out-of-date eval actively
   asserts a falsehood. Re-verify against source whenever the CLI changes.
-- **`must_use` substring matching is crude.** It can pass on a superficially
-  correct string that is wrong in context, or fail on a valid variant it didn't
-  anticipate (case 5 needs the `note` precisely because two different commands
-  are both correct). Treat the structured rubric as a hint, not a judge.
+- **Grading rules mitigate but do not eliminate matching brittleness.** The
+  grading rules above (negative-first, OR groups, token boundaries) catch the
+  most common false passes (mixing `git` and `but`) and false negatives
+  (multiple valid answers), and reduce flag substring collisions. They do not
+  catch every wrong answer in the right shape, nor anticipate every valid
+  variant. Treat the structured rubric as strong guidance, not a proof.
 - **No runner ships with the repo.** There is no harness wired up; these are
   data. Grading them means feeding `prompt` to an agent and checking its output
   against the rubric by hand or with an external tool. Unrun evals give false
