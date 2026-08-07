@@ -1,0 +1,88 @@
+{
+  "skill_name": "but",
+  "description": "Behavioral evaluations for the GitButler CLI skill. Each case pairs a natural-language user request with a rubric describing the expected `but` commands and the git commands the agent must NOT use. Commands are verified against the CLI source in crates/but/src/args and crates/but/src/command; see README.md for the verification method and the benefits/risks of this eval set.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I just finished implementing a login page. Commit my changes to a new branch called fix-auth-bug and push it up.",
+      "expected_output": "Agent commits and creates the branch in one step with `but commit -b fix-auth-bug -m \"...\"` (the -b flag creates the branch when it does not exist), then pushes with `but push fix-auth-bug`. Does NOT run a separate `but branch new` first, and does NOT use `git add`, `git commit`, `git checkout -b`, or `git push`.",
+      "rubric": {
+        "must_use": ["but commit -b", "but push"],
+        "must_not_use": ["git add", "git commit", "git checkout", "git push", "but branch new"]
+      },
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "I've got a bunch of changes in my working directory right now - some are for the new payment integration and some are UI polish for the settings page. Can you separate these into two different branches so I can get independent reviews on them?",
+      "expected_output": "Agent runs `but diff` to see file and hunk IDs for the uncommitted changes, then creates two independent commits with `but commit -b payment-integration -m \"...\" <ids>` and `but commit -b settings-ui -m \"...\" <ids>`, passing the relevant IDs positionally to each. The -b flag creates each branch, so no prior `but branch new` is needed. Does NOT use `git add`, `git stash`, or `git checkout -b`, and does NOT invent flags like --changes or comma-separate the IDs.",
+      "rubric": {
+        "must_use": ["but diff", "but commit -b"],
+        "must_not_use": ["git add", "git stash", "git checkout", "but stage", "but rub", "--changes"]
+      },
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "I just realized the routes.rb change I made should have been part of my earlier 'add API endpoints' commit, not floating around uncommitted. Can you fix that?",
+      "expected_output": "Agent runs `but status -fv` (or `but diff`) to find the file's ID and the target commit's ID, then amends the earlier commit directly with `but amend -t <commit-id> <file-id>`. Does NOT use `but rub` (retired command), `git rebase -i`, or `git commit --amend`.",
+      "rubric": {
+        "must_use": ["but status", "but amend -t"],
+        "must_not_use": ["but rub", "git rebase", "git commit --amend", "git add"]
+      },
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Push my feature-auth branch and open a PR for it on GitHub.",
+      "expected_output": "Agent uses `but pr new feature-auth` which auto-pushes the branch and its ancestors and then creates the review in one step. Provides -t or -m so no editor blocks. Does NOT run `but push` beforehand (pr new pushes automatically), and does NOT use `git push` or `gh pr create`.",
+      "rubric": {
+        "must_use": ["but pr new"],
+        "must_not_use": ["git push", "gh pr create", "but pr feature-auth"]
+      },
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "I messed up my last commit - the changes are wrong. Undo it completely so the changes go back to being uncommitted.",
+      "expected_output": "Agent uses `but uncommit <commit-id>` to move the whole commit's changes back to the uncommitted area, or `but undo` to revert the last operation. May suggest `but oplog` to inspect history first. Does NOT use `but rub <commit> zz` (retired command) or `git reset HEAD~1`.",
+      "rubric": {
+        "must_use": ["but uncommit", "but undo"],
+        "must_not_use": ["but rub", "git reset", "git revert"],
+        "note": "must_use lists acceptable alternatives; either `but uncommit <commit-id>` or `but undo` satisfies the case."
+      },
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "Get the latest from main into my current work.",
+      "expected_output": "Agent runs `but pull` as a single command with no preflight status check. It carries uncommitted changes along and reports the resulting state. If commits come back conflicted, the agent resolves them oldest-first with `but resolve <commit>`, edits the files, then `but resolve finish`. Does NOT use `git pull`, `git rebase`, `git merge`, or `but move`/`but config target` to rebase onto the target.",
+      "rubric": {
+        "must_use": ["but pull"],
+        "must_not_use": ["git pull", "git rebase", "git merge", "but config target"]
+      },
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "I have three stacked branches ready. Push all of them up.",
+      "expected_output": "Agent pushes the stack by selecting its top branch once with `but push <top-branch>`, which pushes that branch and its ancestors. The agent does NOT loop over the three branches with three separate push commands, because one push per stack covers all ancestors. Does NOT use `git push`.",
+      "rubric": {
+        "must_use": ["but push"],
+        "must_not_use": ["git push"],
+        "note": "Failure mode to catch: issuing three separate `but push` calls, one per branch, instead of a single push of the stack's top branch."
+      },
+      "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "Squash my last two commits on the feature branch into one.",
+      "expected_output": "Agent runs `but status` to get the two commit IDs, then squashes with `but squash <source-commit-id> -t <target-commit-id> -m \"...\"`, naming sources positionally and the target with -t. Passes -m so no editor opens. Does NOT use `but rub`, `git rebase -i`, or `git reset --soft`.",
+      "rubric": {
+        "must_use": ["but squash", "-t", "-m"],
+        "must_not_use": ["but rub", "git rebase", "git reset"]
+      },
+      "files": []
+    }
+  ]
+}
