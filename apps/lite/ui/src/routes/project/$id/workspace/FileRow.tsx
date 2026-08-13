@@ -4,6 +4,7 @@ import rowStyles from "./Row.module.css";
 import { showNativeContextMenu, showNativeMenuFromTrigger } from "#ui/native-menu.ts";
 import type { FileParent } from "#ui/operands.ts";
 import { projectSlice } from "#ui/projects/state.ts";
+import type { SelectionScope } from "#ui/selection-scopes.ts";
 import { useAppSelector } from "#ui/store.ts";
 import { Icon } from "#ui/components/Icon.tsx";
 import { classes } from "#ui/components/classes.ts";
@@ -12,12 +13,15 @@ import { Toolbar, Tooltip } from "@base-ui/react";
 import { Match } from "effect";
 import type { ComponentProps, FC } from "react";
 import styles from "./FileRow.module.css";
+import treeStyles from "./FilesTree.module.css";
 import { Row, RowCheckbox, RowLabel, RowLabelContainer, RowToolbar } from "./Row.tsx";
 import { getRowButtonClassName } from "./Row-utils.ts";
 import { DependencyIndicator } from "#ui/routes/project/$id/workspace/DependencyIndicator.tsx";
 import { TooltipPopup } from "#ui/components/Tooltip.tsx";
 import { useFileMenuItems } from "#ui/routes/project/$id/workspace/useFileMenuItems.ts";
 import type { FileRowItem } from "./file-row.ts";
+import { TreeSteps } from "./TreeSteps.tsx";
+import type { TreeChange } from "@gitbutler/but-sdk";
 
 export const FileRow: FC<
 	{
@@ -26,8 +30,18 @@ export const FileRow: FC<
 		fileParent: FileParent;
 		branchNameByCommitId: (commitId: string) => string | undefined;
 		canCheck: boolean;
+		canUncommit: boolean;
+		uncommit?: (change: TreeChange, extendToCheckedFiles: boolean) => void;
 		isChecked: boolean;
 		checkFile: (evt: { path: string; shiftKey: boolean }) => void;
+		/** How many directories this row sits inside. Zero in list mode. */
+		depth: number;
+		/**
+		 * Where the directory goes: leading the file name, trailing it, or nowhere
+		 * — the tree already says which directory this is. Resolved by the list.
+		 */
+		pathDisplay: "lead" | "trail" | "hidden";
+		selectionScope: SelectionScope;
 	} & Omit<ComponentProps<typeof Row>, "projectId">
 > = ({
 	item,
@@ -35,8 +49,13 @@ export const FileRow: FC<
 	fileParent,
 	branchNameByCommitId,
 	canCheck,
+	canUncommit,
+	uncommit,
 	isChecked,
 	checkFile,
+	depth,
+	pathDisplay,
+	selectionScope,
 	id,
 	...restProps
 }) => {
@@ -50,6 +69,8 @@ export const FileRow: FC<
 		operand: { parent: fileParent, path: relativePath },
 		path: relativePath,
 		change: item._tag === "Change" ? item.change : undefined,
+		canUncommit,
+		uncommit,
 	});
 
 	const lastSepIdx = relativePath.lastIndexOf("/");
@@ -67,15 +88,22 @@ export const FileRow: FC<
 					<Row
 						{...restProps}
 						isChecked={isChecked}
-						className={classes(restProps.className, styles.row)}
+						onShiftSelect={
+							isDefaultMode && canCheck
+								? () => checkFile({ path: relativePath, shiftKey: true })
+								: undefined
+						}
+						className={classes(restProps.className, treeStyles.row)}
 						onContextMenu={(event) => {
 							void showNativeContextMenu(event, menuItems);
 						}}
 					/>
 				}
 			>
-				<div className={styles.iconWithCheckbox}>
-					<FileIcon fileName={fileName} className={styles.icon} />
+				<TreeSteps depth={depth} />
+
+				<div className={treeStyles.leading}>
+					<FileIcon fileName={fileName} className={treeStyles.leadingMark} />
 					<Tooltip.Root
 						// This gets in the way when the user tries to move their hover to a
 						// sibling row.
@@ -85,7 +113,7 @@ export const FileRow: FC<
 							disabled={!isDefaultMode || !canCheck}
 							aria-label={`Check file ${relativePath}`}
 							checked={isChecked}
-							className={styles.checkbox}
+							className={treeStyles.leadingCheckbox}
 							nativeButton
 							render={<Tooltip.Trigger />}
 							onCheckedChange={(_checked, { event }) => {
@@ -97,7 +125,14 @@ export const FileRow: FC<
 						/>
 						<Tooltip.Portal>
 							<Tooltip.Positioner sideOffset={4}>
-								<Tooltip.Popup render={<TooltipPopup kbd={changesFileHotkeys.checkFile.hotkey} />}>
+								<Tooltip.Popup
+									render={
+										<TooltipPopup
+											kbd={changesFileHotkeys.checkFile.hotkey}
+											kbdScope={selectionScope}
+										/>
+									}
+								>
 									{changesFileHotkeys.checkFile.meta.name}
 								</Tooltip.Popup>
 							</Tooltip.Positioner>
@@ -114,8 +149,13 @@ export const FileRow: FC<
 						/>
 					)}
 					<RowLabel singleLine>
+						{directoryPath !== null && pathDisplay === "lead" && (
+							<span className={classes(styles.pathLead, rowStyles.fadedText)}>
+								{directoryPath}/
+							</span>
+						)}
 						{fileName}
-						{directoryPath !== null && (
+						{directoryPath !== null && pathDisplay === "trail" && (
 							<span className={classes(styles.pathInit, rowStyles.fadedText)}>{directoryPath}</span>
 						)}
 					</RowLabel>

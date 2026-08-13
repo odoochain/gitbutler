@@ -1,4 +1,5 @@
 import { useBranchCreate, useWorkspaceIntegrateUpstream } from "#ui/api/mutations.ts";
+import { setCursor, setPage, usePage } from "#ui/use-cursor.ts";
 import {
 	guiSettingsQueryOptions,
 	headInfoQueryOptions,
@@ -29,7 +30,7 @@ import { ToggleGroupStyles, ToggleStyles } from "#ui/components/ToggleGroup.tsx"
 import { OutlineTree } from "#ui/routes/project/$id/workspace/OutlineTree/OutlineTree.tsx";
 import { BranchesList } from "#ui/routes/project/$id/workspace/BranchesList.tsx";
 import type { BranchesOutline } from "#ui/routes/project/$id/workspace/useBranchesOutline.ts";
-import { ProjectFolderIcon } from "#ui/routes/project/$id/workspace/ProjectFolderIcon.tsx";
+import { FolderIcon } from "#ui/components/FolderIcon.tsx";
 import { UpstreamList } from "#ui/routes/project/$id/workspace/UpstreamList.tsx";
 import type { UpstreamOutline } from "#ui/routes/project/$id/workspace/useUpstreamOutline.ts";
 import { assert } from "#ui/assert.ts";
@@ -131,24 +132,17 @@ export const Outline: FC<{
 	const isDefaultMode = useAppSelector(
 		(state) => projectSlice.selectors.selectOutlineModeState(state, projectId)._tag === "Default",
 	);
-	const outlineTab = useAppSelector((state) =>
-		projectSlice.selectors.selectOutlineTab(state, projectId),
-	);
+	const outlineTab = usePage();
 
 	const selectOutlineTab = (value: Array<OutlineTab>) => {
 		const head = value[0];
 		if (head === undefined) return;
 
-		dispatch(projectSlice.actions.setOutlineTab({ projectId, tab: head }));
+		setPage(head);
 	};
 
 	const selectBranch = (branch: BranchOperand) => {
-		dispatch(
-			projectSlice.actions.selectOutline({
-				projectId,
-				selection: branchOperand(branch),
-			}),
-		);
+		setCursor("stacks", branchOperand(branch));
 		focusSelectionScope("outline");
 	};
 
@@ -213,19 +207,11 @@ export const Outline: FC<{
 		workspaceIntegrateUpstream({ projectId, updates: rebaseUpdates, dryRun: false });
 	};
 
-	// This should be false if all stacks are up-to-date, but we're currently
-	// lacking this information:
-	// https://linear.app/gitbutler/issue/GB-1560/add-information-about-the-relation-to-the-upstream-to-the-head-info
-	//
-	// A workspace without stacks can still be updated: integrating with no
-	// stack updates advances the target base and reparents the workspace
-	// commit.
-	const emptyWorkspaceBehindTarget =
-		headInfo?.stacks.length === 0 && (headInfo.target?.commitsAhead ?? 0) > 0;
+	// Only an update advances the stored target, so there is work to do exactly
+	// while it trails the target ref. Counting upstream commits misses the case
+	// where a lane already contains them.
 	const canUpdateWorkspace =
-		isDefaultMode &&
-		(rebaseUpdates.length > 0 || emptyWorkspaceBehindTarget) &&
-		!isWorkspaceIntegrateUpstreamPending;
+		isDefaultMode && headInfo?.target?.isCurrent === false && !isWorkspaceIntegrateUpstreamPending;
 	const canFetchFromRemotes = isDefaultMode && !isWorkspaceFetchFromRemotesPending;
 
 	const canCreateIndependentBranch = isDefaultMode && !isBranchCreatePending;
@@ -276,12 +262,7 @@ export const Outline: FC<{
 		{
 			hotkey: "[",
 			callback: () => {
-				dispatch(
-					projectSlice.actions.setOutlineTab({
-						projectId,
-						tab: adjacentOutlineTab(outlineTab, -1),
-					}),
-				);
+				setPage(adjacentOutlineTab(outlineTab, -1));
 			},
 			options: {
 				conflictBehavior: "allow",
@@ -291,9 +272,7 @@ export const Outline: FC<{
 		{
 			hotkey: "]",
 			callback: () => {
-				dispatch(
-					projectSlice.actions.setOutlineTab({ projectId, tab: adjacentOutlineTab(outlineTab, 1) }),
-				);
+				setPage(adjacentOutlineTab(outlineTab, 1));
 			},
 			options: {
 				conflictBehavior: "allow",
@@ -320,7 +299,7 @@ export const Outline: FC<{
 								)}
 								onClick={openProjectPicker}
 							>
-								<ProjectFolderIcon className={styles.workspaceNameFolder} />
+								<FolderIcon className={styles.workspaceNameFolder} />
 								<span className={styles.workspaceNameLabel}>{project.title}</span>
 							</Tooltip.Trigger>
 							<Tooltip.Portal>

@@ -37,7 +37,8 @@ fn insert_below_merge_commit() -> Result<()> {
     .validated()?;
 
     let mut ws = graph.into_workspace()?;
-    let mut editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let mut editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
 
     let merge_id = repo.rev_parse_single("HEAD~")?;
 
@@ -139,7 +140,8 @@ fn insert_below_merge_commit_excluded_mappings() -> Result<()> {
     .validated()?;
 
     let mut ws = graph.into_workspace()?;
-    let mut editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let mut editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
 
     let merge_id = repo.rev_parse_single("HEAD~")?;
 
@@ -244,7 +246,8 @@ fn insert_above_commit_with_two_children() -> Result<()> {
     .validated()?;
 
     let mut ws = graph.into_workspace()?;
-    let mut editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let mut editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
 
     let base_id = repo.rev_parse_single("base")?;
 
@@ -274,8 +277,8 @@ fn insert_above_commit_with_two_children() -> Result<()> {
                 ├── ►:2[2]:A
                 │   └── ·72d9d9b (⌂|1)
                 │       └── ►:4[3]:main
-                │           ├── ·3dc4e45 (⌂|1) ►tags/base
-                │           └── 🏁·8f0d338 (⌂|1)
+                │           ├── ·3dc4e45 (⌂|1)
+                │           └── 🏁·8f0d338 (⌂|1) ►tags/base
                 └── ►:3[2]:B
                     └── ·df0cf44 (⌂|1)
                         └── →:4: (main)
@@ -294,8 +297,8 @@ fn insert_above_commit_with_two_children() -> Result<()> {
 | * df0cf44 (B) C: new file with 10 lines
 * | 72d9d9b (A) A: 10 lines on top
 |/  
-* 3dc4e45 (tag: base, main) Commit above base commit
-* 8f0d338 base
+* 3dc4e45 (main) Commit above base commit
+* 8f0d338 (tag: base) base
 
 "#]]
         .raw()

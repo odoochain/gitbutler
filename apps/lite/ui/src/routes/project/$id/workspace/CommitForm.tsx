@@ -1,20 +1,30 @@
 import uiStyles from "#ui/components/ui.module.css";
-import { commitAmendMutationKey, useCommitCreate } from "#ui/api/mutations.ts";
-import { headInfoQueryOptions } from "#ui/api/queries.ts";
+import { setCursor } from "#ui/use-cursor.ts";
+import { useBranchCreate, useCommitCreate, useGenerateCommitMessage } from "#ui/api/mutations.ts";
+import {
+	aiConfigurationQueryOptions,
+	branchCannedNameQueryOptions,
+	headInfoQueryOptions,
+} from "#ui/api/queries.ts";
 import { getHeadInfoIndex, resolveRelativeTo } from "#ui/api/ref-info.ts";
 import { getButtonClassName } from "#ui/components/Button.tsx";
 import { classes } from "#ui/components/classes.ts";
 import { Icon } from "#ui/components/Icon.tsx";
 import { Kbd } from "#ui/components/Kbd.tsx";
 import { TooltipPopup } from "#ui/components/Tooltip.tsx";
+import {
+	changesSelectedForCommit,
+	commitMessageGenerationButtonState,
+} from "#ui/commit-message-generation.ts";
 import { draftCommitMessageQueryOptions, usePersistDraftCommitMessage } from "#ui/draft.ts";
 import { changesHotkeys, outlineHotkeys, toElectronAccelerator } from "#ui/hotkeys.ts";
 import { nativeMenuItem, showNativeMenuFromTrigger, type NativeMenuItem } from "#ui/native-menu.ts";
 import { operandEquals, operandIdentityKey, type Operand } from "#ui/operands.ts";
 import { createDiffSpec } from "#ui/operations/diff-specs.ts";
 import { projectSlice } from "#ui/projects/state.ts";
+import { projectAiSettingsQueryOptions } from "#ui/project-ai-settings.ts";
 import { focusSelectionScope } from "#ui/selection-scopes.ts";
-import { useAppDispatch, useAppSelector, useAppStore } from "#ui/store.ts";
+import { useAppSelector, useAppStore } from "#ui/store.ts";
 import { Button, Combobox, Tooltip } from "@base-ui/react";
 import type { InsertSide, RelativeTo, WorktreeChanges } from "@gitbutler/but-sdk";
 import { useHotkey, useHotkeys } from "@tanstack/react-hotkeys";
@@ -100,6 +110,13 @@ export const CommitForm: FC<{
 	projectId: string;
 	commitTarget: CommitTargetComboboxItem | null;
 	targetComboboxItems: Array<CommitTargetComboboxItem>;
+	/**
+	 * Whether the workspace holds no branch to commit onto. Committing is still
+	 * allowed — the branch is created on submit — so this is deliberately kept
+	 * apart from `commitTarget`, whose items carry an `Operand` that drives the
+	 * outline selection and which a branch that doesn't exist yet cannot have.
+	 */
+	hasNoBranches: boolean;
 	startCommitButtonId: string;
 	commitMessageInputId: string;
 	onAmendCommit: (commitId: string) => void;
@@ -110,6 +127,7 @@ export const CommitForm: FC<{
 	projectId,
 	commitTarget,
 	targetComboboxItems,
+	hasNoBranches,
 	startCommitButtonId,
 	commitMessageInputId,
 	onAmendCommit,
@@ -117,16 +135,24 @@ export const CommitForm: FC<{
 	worktreeChanges,
 	className,
 }) => {
-	const dispatch = useAppDispatch();
 	const store = useAppStore();
 	const { isPending: isCommitCreatePending, mutate: commitCreate } = useCommitCreate();
+	const { isPending: isBranchCreatePending, mutate: branchCreate } = useBranchCreate();
+	const { isPending: isGenerating, mutate: generateMessage } = useGenerateCommitMessage();
 
 	const commitTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 	const formRef = useRef<HTMLFormElement | null>(null);
 
 	const { data: draftMessage } = useQuery(draftCommitMessageQueryOptions(projectId));
 	const { mutate: persistDraftMessage } = usePersistDraftCommitMessage();
-
+	const { data: isAiConfigured = false } = useQuery({
+		...aiConfigurationQueryOptions,
+		select: (configuration) => configuration.isConfigured,
+	});
+	const { data: isProjectAiEnabled = false } = useQuery({
+		...projectAiSettingsQueryOptions(projectId),
+		select: (settings) => settings.enabled,
+	});
 	const isDefaultMode = useAppSelector(
 		(state) => projectSlice.selectors.selectOutlineModeState(state, projectId)._tag === "Default",
 	);
@@ -135,12 +161,30 @@ export const CommitForm: FC<{
 		...headInfoQueryOptions(projectId),
 		select: getHeadInfoIndex,
 	});
-	const isAmendCommitPending = useIsMutating({ mutationKey: commitAmendMutationKey }) > 0;
-	const isCommitOrAmendPending = isCommitCreatePending || isAmendCommitPending;
+	const isAmendCommitPending =
+		useIsMutating({ predicate: (m) => m.options.mutationFn === window.lite.commitAmend }) > 0;
+	// The branch creation is the first half of a commit here, so it keeps the
+	// form read-only for its duration and rules out a double submit.
+	const isCommitOrAmendPending =
+		isCommitCreatePending || isAmendCommitPending || isBranchCreatePending;
+
+	// Only meaningful without a branch to commit onto, and pointless to fetch
+	// otherwise: with branches present the target comes from the combobox.
+	const { data: cannedBranchName } = useQuery({
+		...branchCannedNameQueryOptions(projectId),
+		enabled: hasNoBranches,
+	});
+	const draftBranchLabel = cannedBranchName ?? "New branch";
 
 	const [open, setOpen] = useState(false);
 	const [isExpanded, setIsExpanded] = useState(false);
 	const [commitLabelHidden, setCommitLabelHidden] = useState(false);
+	const generationButton = commitMessageGenerationButtonState({
+		enabled: isProjectAiEnabled,
+		configured: isAiConfigured,
+		busy: isGenerating || isCommitOrAmendPending,
+		changeCount: worktreeChanges?.changes.length ?? 0,
+	});
 
 	// Track whether the container query hides the label, including while resizing.
 	// This is a ref callback rather than a mount effect because the form is
@@ -161,8 +205,13 @@ export const CommitForm: FC<{
 		return () => observer.disconnect();
 	};
 
-	const canCommitOrAmendBase = isDefaultMode && commitTarget !== null && !isCommitOrAmendPending;
-	const canCommit = canCommitOrAmendBase;
+	const canCommitOrAmendBase =
+		isDefaultMode && commitTarget !== null && !isCommitOrAmendPending && !isGenerating;
+	// Without branches there is no target to pick, but the commit creates one, so
+	// it must not be blocked. Amending still needs a commit that already exists.
+	const canCommit =
+		canCommitOrAmendBase ||
+		(isDefaultMode && hasNoBranches && !isCommitOrAmendPending && !isGenerating);
 	const amendTargetCommitId =
 		commitTarget && headInfoIndex
 			? resolveRelativeTo({ headInfoIndex, relativeTo: commitTarget.relativeTo })
@@ -170,13 +219,12 @@ export const CommitForm: FC<{
 	const canAmend = canCommitOrAmendBase && canAmendCommit && amendTargetCommitId !== null;
 
 	const selectBranch = (option: CommitTargetComboboxItem | null) => {
-		if (option)
-			dispatch(projectSlice.actions.selectOutline({ projectId, selection: option.operand }));
+		if (option) setCursor("stacks", option.operand);
 		setOpen(false);
 	};
 
-	const createCommit = () => {
-		if (!commitTarget || !worktreeChanges) return;
+	const commitOnto = (relativeTo: RelativeTo) => {
+		if (!worktreeChanges) return;
 
 		const checkedUncommittedFilePaths = projectSlice.selectors.selectCheckedUncommittedFilePaths(
 			store.getState(),
@@ -186,14 +234,14 @@ export const CommitForm: FC<{
 			{
 				projectId,
 				message: commitTextareaRef.current?.value ?? draftMessage ?? "",
-				relativeTo: commitTarget.relativeTo,
+				relativeTo,
 				changes: worktreeChanges.changes.flatMap((change) =>
 					checkedUncommittedFilePaths.size === 0 || checkedUncommittedFilePaths.has(change.path)
 						? [createDiffSpec(change, [])]
 						: [],
 				),
 				changesSource: { type: "head" },
-				side: Match.value(commitTarget.relativeTo).pipe(
+				side: Match.value(relativeTo).pipe(
 					Match.withReturnType<InsertSide>(),
 					Match.when({ type: "commit" }, () => "above"),
 					Match.when({ type: "reference" }, () => "below"),
@@ -214,6 +262,32 @@ export const CommitForm: FC<{
 		);
 	};
 
+	const createCommit = () => {
+		if (commitTarget) {
+			commitOnto(commitTarget.relativeTo);
+			return;
+		}
+
+		// An empty workspace has nothing to commit onto, so the branch is created
+		// first — lazily, so that merely opening the commit form writes no ref. On
+		// failure `useBranchCreate` toasts and no commit is attempted, leaving the
+		// form and its draft message untouched.
+		if (!hasNoBranches || !worktreeChanges) return;
+
+		branchCreate(
+			{ projectId, newRef: null, placement: { type: "independent" } },
+			{
+				onSuccess: (response) => {
+					setCursor("stacks", {
+						_tag: "Branch",
+						branchRef: response.newRef.fullNameBytes,
+					});
+					commitOnto({ type: "referenceBytes", subject: response.newRef.fullNameBytes });
+				},
+			},
+		);
+	};
+
 	const amendCommit = () => {
 		if (amendTargetCommitId === null) throw new Error("No commit to amend.");
 
@@ -224,8 +298,37 @@ export const CommitForm: FC<{
 
 		createCommit();
 	};
+
+	const generateCommitMessage = () => {
+		if (!worktreeChanges || isGenerating) return;
+
+		const checkedPaths = projectSlice.selectors.selectCheckedUncommittedFilePaths(
+			store.getState(),
+			projectId,
+		);
+		const changes = changesSelectedForCommit(worktreeChanges.changes, checkedPaths);
+		if (changes.length === 0) return;
+
+		generateMessage(
+			{
+				projectId,
+				changes,
+				previousMessage: commitTextareaRef.current?.value ?? draftMessage ?? "",
+				onValue: (value) => {
+					if (commitTextareaRef.current) commitTextareaRef.current.value = value;
+				},
+			},
+			{
+				onSuccess: (response) => {
+					const message = response.trim();
+					if (commitTextareaRef.current) commitTextareaRef.current.value = message;
+					persistDraftMessage({ projectId, message });
+				},
+			},
+		);
+	};
 	const commitMenuItems: Array<NativeMenuItem> = [
-		// oxlint-disable-next-line react-hooks-js/refs -- False positive. Ref is only accessed in `onSelect` event handler.
+		// oxlint-disable-next-line react-hooks-js/refs -- The ref is only read by the onSelect callback.
 		nativeMenuItem({
 			label: "Commit",
 			enabled: canCommit,
@@ -246,7 +349,7 @@ export const CommitForm: FC<{
 			callback: () => setOpen(true),
 			options: {
 				conflictBehavior: "allow",
-				enabled: isDefaultMode && !isCommitOrAmendPending,
+				enabled: isDefaultMode && !isCommitOrAmendPending && !hasNoBranches,
 			},
 		},
 		{
@@ -286,7 +389,7 @@ export const CommitForm: FC<{
 		},
 		{
 			conflictBehavior: "allow",
-			enabled: isExpanded,
+			enabled: isExpanded && !isGenerating,
 		},
 	);
 
@@ -301,7 +404,7 @@ export const CommitForm: FC<{
 					open={open}
 					onOpenChange={setOpen}
 					onValueChange={selectBranch}
-					disabled={!isDefaultMode || isCommitOrAmendPending}
+					disabled={!isDefaultMode || isCommitOrAmendPending || hasNoBranches}
 				>
 					<Tooltip.Root>
 						<Combobox.Trigger
@@ -309,7 +412,9 @@ export const CommitForm: FC<{
 								getButtonClassName({ variant: "outline" }),
 								styles.collapsedTargetTrigger,
 							)}
-							aria-label="Select commit target"
+							aria-label={
+								hasNoBranches ? `Will create branch ${draftBranchLabel}` : "Select commit target"
+							}
 							render={<Button focusableWhenDisabled render={<Tooltip.Trigger />} />}
 						>
 							<Icon name="bullseye" size={14} />
@@ -321,9 +426,18 @@ export const CommitForm: FC<{
 						<Tooltip.Portal>
 							<Tooltip.Positioner sideOffset={4}>
 								<Tooltip.Popup
-									render={<TooltipPopup kbd={changesHotkeys.selectCommitTarget.hotkey} />}
+									render={
+										<TooltipPopup
+											kbd={hasNoBranches ? undefined : changesHotkeys.selectCommitTarget.hotkey}
+										/>
+									}
 								>
-									{commitTarget ? (
+									{hasNoBranches ? (
+										<span className={styles.tooltipTarget}>
+											<span className={styles.tooltipTargetLabel}>Will create branch:</span>
+											<span className={styles.tooltipTargetName}>{draftBranchLabel}</span>
+										</span>
+									) : commitTarget ? (
 										<span className={styles.tooltipTarget}>
 											<span className={styles.tooltipTargetLabel}>Target:</span>
 											<span className={styles.tooltipTargetName}>{commitTarget.label}</span>
@@ -393,7 +507,7 @@ export const CommitForm: FC<{
 				}}
 				aria-label={commitTextareaLabel}
 				disabled={!isDefaultMode}
-				readOnly={isCommitOrAmendPending}
+				readOnly={isCommitOrAmendPending || isGenerating}
 				placeholder={commitTextareaLabel}
 				defaultValue={draftMessage ?? ""}
 				className={classes("text-13", "text-body", styles.textarea, uiStyles.overlayScrollbar)}
@@ -406,12 +520,14 @@ export const CommitForm: FC<{
 					open={open}
 					onOpenChange={setOpen}
 					onValueChange={selectBranch}
-					disabled={!isDefaultMode || isCommitOrAmendPending}
+					disabled={!isDefaultMode || isCommitOrAmendPending || isGenerating || hasNoBranches}
 				>
 					<Tooltip.Root>
 						<Combobox.Trigger
 							className={classes("text-13 text-semibold", styles.targetTrigger)}
-							aria-label="Select commit target"
+							aria-label={
+								hasNoBranches ? `Will create branch ${draftBranchLabel}` : "Select commit target"
+							}
 							render={<Button focusableWhenDisabled render={<Tooltip.Trigger />} />}
 						>
 							<Icon
@@ -419,15 +535,28 @@ export const CommitForm: FC<{
 								size={14}
 							/>
 							<span className={styles.targetTriggerLabel}>
-								<Combobox.Value placeholder="Select commit target" />
+								{hasNoBranches ? (
+									<>
+										{draftBranchLabel}
+										<span className={styles.targetTriggerBadge}>new</span>
+									</>
+								) : (
+									<Combobox.Value placeholder="Select commit target" />
+								)}
 							</span>
 						</Combobox.Trigger>
 						<Tooltip.Portal>
 							<Tooltip.Positioner sideOffset={4}>
 								<Tooltip.Popup
-									render={<TooltipPopup kbd={changesHotkeys.selectCommitTarget.hotkey} />}
+									render={
+										<TooltipPopup
+											kbd={hasNoBranches ? undefined : changesHotkeys.selectCommitTarget.hotkey}
+										/>
+									}
 								>
-									Select commit target
+									{hasNoBranches
+										? `Will create branch ${draftBranchLabel}`
+										: "Select commit target"}
 								</Tooltip.Popup>
 							</Tooltip.Positioner>
 						</Tooltip.Portal>
@@ -449,7 +578,11 @@ export const CommitForm: FC<{
 								focusSelectionScope("uncommitted-files");
 							}}
 							render={
-								<Button focusableWhenDisabled disabled={isCommitOrAmendPending} type="button" />
+								<Button
+									focusableWhenDisabled
+									disabled={isCommitOrAmendPending || isGenerating}
+									type="button"
+								/>
 							}
 						>
 							Cancel
@@ -460,6 +593,32 @@ export const CommitForm: FC<{
 							</Tooltip.Positioner>
 						</Tooltip.Portal>
 					</Tooltip.Root>
+
+					{generationButton.visible && (
+						<Tooltip.Root>
+							<Tooltip.Trigger
+								aria-label="Generate commit message"
+								className={getButtonClassName({ variant: "outline", iconOnly: true })}
+								onClick={generateCommitMessage}
+								render={
+									<Button
+										focusableWhenDisabled
+										type="button"
+										disabled={generationButton.disabled}
+									/>
+								}
+							>
+								<Icon name={isGenerating ? "spinner" : "ai"} />
+							</Tooltip.Trigger>
+							<Tooltip.Portal>
+								<Tooltip.Positioner sideOffset={4}>
+									<Tooltip.Popup render={<TooltipPopup />}>
+										{isGenerating ? "Generating commit message…" : "Generate commit message"}
+									</Tooltip.Popup>
+								</Tooltip.Positioner>
+							</Tooltip.Portal>
+						</Tooltip.Root>
+					)}
 
 					{/* The tooltip is redundant while the label is visible. */}
 					<Tooltip.Root disabled={!commitLabelHidden}>

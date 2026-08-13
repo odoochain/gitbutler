@@ -28,7 +28,8 @@ fn four_commits() -> Result<()> {
         Graph::from_head(&repo, &*meta, Default::default(), standard_options())?.validated()?;
 
     let mut ws = graph.into_workspace()?;
-    let editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
 
     snapbox::assert_data_eq!(
         editor.steps_ascii(),
@@ -67,7 +68,8 @@ fn merge_in_the_middle() -> Result<()> {
         Graph::from_head(&repo, &*meta, Default::default(), standard_options())?.validated()?;
 
     let mut ws = graph.into_workspace()?;
-    let editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
 
     snapbox::assert_data_eq!(
         editor.steps_ascii(),
@@ -82,7 +84,7 @@ fn merge_in_the_middle() -> Result<()> {
 │ ●  984fd1c C: new file with 10 lines
 ├─╯
 ◎  refs/heads/main
-◎  refs/tags/base
+◎  refs/tags/base (immutable)
 ●  8f0d338 base
 "#]]
     );
@@ -117,7 +119,8 @@ fn three_branches_merged() -> Result<()> {
         Graph::from_head(&repo, &*meta, Default::default(), standard_options())?.validated()?;
 
     let mut ws = graph.into_workspace()?;
-    let editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
 
     snapbox::assert_data_eq!(
         editor.steps_ascii(),
@@ -136,7 +139,7 @@ fn three_branches_merged() -> Result<()> {
 │   ●  68a2fc3 C: add 10 lines to new file
 │   ●  984fd1c C: new file with 10 lines
 ├───╯
-◎  refs/tags/base
+◎  refs/tags/base (immutable)
 ●  8f0d338 base
 "#]]
     );
@@ -176,7 +179,8 @@ fn many_references() -> Result<()> {
     );
 
     let mut ws = graph.into_workspace()?;
-    let editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
 
     snapbox::assert_data_eq!(
         editor.steps_ascii(),
@@ -241,7 +245,8 @@ fn first_parent_leg_long() -> Result<()> {
     );
 
     let mut ws = graph.into_workspace()?;
-    let editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
 
     snapbox::assert_data_eq!(
         editor.steps_ascii(),
@@ -258,7 +263,7 @@ fn first_parent_leg_long() -> Result<()> {
 │ ●  984fd1c C: new file with 10 lines
 ├─╯
 ◎  refs/heads/main
-◎  refs/tags/base
+◎  refs/tags/base (immutable)
 ●  8f0d338 base
 "#]]
     );
@@ -312,7 +317,8 @@ fn second_parent_leg_long() -> Result<()> {
     );
 
     let mut ws = graph.into_workspace()?;
-    let editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
 
     snapbox::assert_data_eq!(
         editor.steps_ascii(),
@@ -329,7 +335,7 @@ fn second_parent_leg_long() -> Result<()> {
 │ ●  984fd1c C: new file with 10 lines
 ├─╯
 ◎  refs/heads/main
-◎  refs/tags/base
+◎  refs/tags/base (immutable)
 ●  8f0d338 base
 "#]]
     );
@@ -388,7 +394,8 @@ fn workspace_with_empty_stack() -> Result<()> {
     );
 
     let mut ws = graph.into_workspace()?;
-    let editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
 
     snapbox::assert_data_eq!(
         editor.steps_ascii(),
@@ -457,7 +464,8 @@ fn workspace_with_three_empty_stacks() -> Result<()> {
     );
 
     let mut ws = graph.into_workspace()?;
-    let editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
 
     snapbox::assert_data_eq!(
         editor.steps_ascii(),
@@ -517,7 +525,8 @@ fn commit_with_two_parents() -> Result<()> {
     );
 
     let mut ws = graph.into_workspace()?;
-    let editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
 
     snapbox::assert_data_eq!(
         editor.steps_ascii(),
@@ -543,7 +552,8 @@ fn includes_extra_refs_in_editor_creation() -> Result<()> {
         let graph =
             Graph::from_head(&repo, &*meta, target_meta(), standard_options())?.validated()?;
         let mut ws = graph.into_workspace()?;
-        let editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+        let mut db = but_testsupport::in_memory_db();
+        let editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
 
         snapbox::assert_data_eq!(
             editor.steps_ascii(),
@@ -571,10 +581,12 @@ fn includes_extra_refs_in_editor_creation() -> Result<()> {
         let graph =
             Graph::from_head(&repo, &*meta, target_meta(), standard_options())?.validated()?;
         let mut ws = graph.into_workspace()?;
+        let mut db = but_testsupport::in_memory_db();
         let editor = Editor::create_with_opts(
             &mut ws,
             &mut *meta,
             &repo,
+            &mut db,
             &GraphEditorOptions {
                 extra_mutable_refs: vec![main_ref.clone()],
                 ..<_>::default()
@@ -656,7 +668,8 @@ fn merge_first_parent_older_than_second() -> Result<()> {
     );
 
     let mut ws = graph.into_workspace()?;
-    let editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
 
     snapbox::assert_data_eq!(
         editor.steps_ascii(),
@@ -672,7 +685,7 @@ fn merge_first_parent_older_than_second() -> Result<()> {
 │ ●  72614bb new commit 1 on second-parent
 ├─╯
 ◎  refs/heads/main
-◎  refs/tags/base
+◎  refs/tags/base (immutable)
 ●  793a434 base
 "#]]
     );
@@ -752,7 +765,8 @@ fn immutable_entrypoints_propogate_until_mutable_entrypoints() -> Result<()> {
         extra_mutable_refs: vec!["refs/heads/explicit-mut".try_into()?],
         ..Default::default()
     };
-    let editor = Editor::create_with_opts(&mut ws, &mut *meta, &repo, &opts)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create_with_opts(&mut ws, &mut *meta, &repo, &mut db, &opts)?;
 
     snapbox::assert_data_eq!(
         editor.steps_ascii(),

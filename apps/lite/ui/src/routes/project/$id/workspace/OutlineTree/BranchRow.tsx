@@ -1,5 +1,12 @@
 import rowStyles from "../Row.module.css";
 import {
+	currentParams,
+	enterKeyboardTransfer,
+	setCursor,
+	startRenameBranch,
+} from "#ui/use-cursor.ts";
+import { commitParamRef } from "#ui/cursor-url.ts";
+import {
 	useBranchCreate,
 	useBranchRemove,
 	useCommitInsertBlank,
@@ -9,6 +16,7 @@ import {
 } from "#ui/api/mutations.ts";
 import {
 	forgeInfoOptions,
+	headInfoQueryOptions,
 	listCIChecksQueryOptions,
 	listReviewsQueryOptions,
 } from "#ui/api/queries.ts";
@@ -34,6 +42,7 @@ import {
 import { branchOperand, operandEquals, type BranchOperand } from "#ui/operands.ts";
 import { projectSlice } from "#ui/projects/state.ts";
 import { focusSelectionScope } from "#ui/selection-scopes.ts";
+import { getHeadInfoIndex } from "#ui/api/ref-info.ts";
 import { useAppDispatch, useAppSelector } from "#ui/store.ts";
 import { prForgeUrl } from "#ui/pr.ts";
 import { Badge, type BadgeVariant } from "#ui/components/Badge.tsx";
@@ -43,9 +52,11 @@ import {
 	RowLabelContainer,
 	RowLabelGroup,
 	RowMeta,
+	RowMetaSeparator,
 	RowToolbar,
 } from "../Row.tsx";
 import { getRowButtonClassName } from "../Row-utils.ts";
+import { toggleFoldedSegment } from "./fold.ts";
 import { InlineEditor } from "./InlineEditor.tsx";
 import { insertBlankCommitMenuItem } from "./insertBlankCommitMenuItem.ts";
 import { ItemRow } from "./ItemRow.tsx";
@@ -127,6 +138,10 @@ export const BranchRow: FC<
 	...restProps
 }) => {
 	const { data: forgeInfo } = useQuery(forgeInfoOptions(projectId));
+	const { data: headInfoIndex } = useQuery({
+		...headInfoQueryOptions(projectId),
+		select: getHeadInfoIndex,
+	});
 	const { data: reviews } = useQuery({
 		...listReviewsQueryOptions({ projectId, cacheConfig: "noCache" }),
 		enabled: !!forgeInfo?.capabilities.prService,
@@ -175,12 +190,12 @@ export const BranchRow: FC<
 	const { mutateAsync: branchRename } = useBranchRename();
 
 	const startEditing = () => {
-		dispatch(projectSlice.actions.startRenameBranch({ projectId, branch: branchOperandV }));
+		startRenameBranch(branchOperandV);
 	};
 
 	const endEditing = () => {
 		dispatch(projectSlice.actions.exitMode({ projectId }));
-		dispatch(projectSlice.actions.selectOutline({ projectId, selection: operand }));
+		setCursor("stacks", operand);
 		focusSelectionScope("outline");
 	};
 
@@ -227,12 +242,7 @@ export const BranchRow: FC<
 		side === "below" && bottomRelativeTo !== null ? bottomRelativeTo : relativeTo;
 
 	const cutBranch = () => {
-		dispatch(
-			projectSlice.actions.enterKeyboardTransferMode({
-				projectId,
-				sources: [operand],
-			}),
-		);
+		enterKeyboardTransfer({ sources: [operand] });
 		focusSelectionScope("outline");
 	};
 
@@ -260,14 +270,7 @@ export const BranchRow: FC<
 			},
 			{
 				onSuccess: (response) => {
-					dispatch(
-						projectSlice.actions.selectOutline({
-							projectId,
-							selection: branchOperand({
-								branchRef: response.newRef.fullNameBytes,
-							}),
-						}),
-					);
+					setCursor("stacks", branchOperand({ branchRef: response.newRef.fullNameBytes }));
 				},
 			},
 		);
@@ -292,9 +295,7 @@ export const BranchRow: FC<
 		});
 	};
 
-	const openPRInBrowser = async (evt?: MouseEvent<HTMLAnchorElement>): Promise<void> => {
-		evt?.preventDefault();
-
+	const openPRInBrowser = async (): Promise<void> => {
 		if (mforgeUrl != null) await window.lite.openInWebBrowser(mforgeUrl);
 	};
 
@@ -315,7 +316,38 @@ export const BranchRow: FC<
 			? "Force Push Branch"
 			: "Push Branch";
 
+	const foldLabel = isFolded ? "Unfold commits" : "Fold commits";
+	const toggleFolded = () => {
+		// Hand the selection over only when folding would hide it — the selected
+		// commit sits in this segment. Unrelated selections (and the details pane
+		// they drive) stay put.
+		const commitRef = commitParamRef(currentParams().stacks);
+		const storedSegmentRef =
+			commitRef === null
+				? undefined
+				: "changeId" in commitRef
+					? headInfoIndex?.commitContextsByChangeId(commitRef.changeId)?.[0].segment.refName
+					: headInfoIndex?.commitContextByCommitId(commitRef.commitId)?.segment.refName;
+		const foldHidesSelection =
+			!isFolded &&
+			storedSegmentRef != null &&
+			decodeBytes(storedSegmentRef.fullNameBytes) === branchRef;
+
+		toggleFoldedSegment(dispatch, {
+			projectId,
+			branchRefBytes: refName.fullNameBytes,
+			select: foldHidesSelection,
+		});
+	};
+
 	const menuItems: Array<NativeMenuItem> = [
+		nativeMenuItem({
+			label: isFolded ? "Unfold Commits" : "Fold Commits",
+			enabled: commitCount > 0,
+			accelerator: toElectronAccelerator(outlineHotkeys.toggleFoldBranch.hotkey),
+			onSelect: toggleFolded,
+		}),
+		nativeMenuSeparator,
 		nativeMenuItem({
 			label: pushMenuLabel,
 			enabled: !workspaceBranchAndAncestorsPushDisabled,
@@ -340,7 +372,7 @@ export const BranchRow: FC<
 		}),
 		nativeMenuSeparator,
 		nativeMenuItem({
-			label: "Open In Browser",
+			label: "Open Pull Request In Browser",
 			enabled: mforgeUrl != null,
 			accelerator: toElectronAccelerator(outlineHotkeys.openPRInBrowser.hotkey),
 			onSelect: openPRInBrowser,
@@ -382,26 +414,43 @@ export const BranchRow: FC<
 	return (
 		<ItemRow
 			{...restProps}
-			projectId={projectId}
 			operand={operand}
 			onContextMenu={(event) => {
 				void showNativeContextMenu(event, menuItems);
 			}}
 		>
 			{commitCount > 0 ? (
-				<RowFoldToggle
-					folded={isFolded}
-					aria-label={isFolded ? "Unfold commits" : "Fold commits"}
-					onClick={() =>
-						dispatch(projectSlice.actions.toggleSegmentFolded({ projectId, branchRef }))
-					}
-					glyph={
-						// The glyph describes where the branch sits in the stack, so it
-						// does not change with fold state.
-						<GraphSegment glyph={isTopSegment ? "forkRight" : "joinRight"} status={graphStatus} />
-					}
-					foldedIndicator={<GraphSegment glyph="group" status={graphStatus} />}
-				/>
+				<Tooltip.Root>
+					<Tooltip.Trigger
+						aria-label={foldLabel}
+						onClick={toggleFolded}
+						render={
+							<RowFoldToggle
+								folded={isFolded}
+								glyph={
+									// The glyph describes where the branch sits in the stack, so it
+									// does not change with fold state.
+									<GraphSegment
+										glyph={isTopSegment ? "forkRight" : "joinRight"}
+										status={graphStatus}
+									/>
+								}
+								foldedIndicator={<GraphSegment glyph="group" status={graphStatus} />}
+							/>
+						}
+					/>
+					<Tooltip.Portal>
+						<Tooltip.Positioner sideOffset={4}>
+							<Tooltip.Popup
+								render={
+									<TooltipPopup kbd={outlineHotkeys.toggleFoldBranch.hotkey} kbdScope="outline" />
+								}
+							>
+								{foldLabel}
+							</Tooltip.Popup>
+						</Tooltip.Positioner>
+					</Tooltip.Portal>
+				</Tooltip.Root>
 			) : (
 				<GraphSegment glyph={isTopSegment ? "forkRight" : "joinRight"} status={graphStatus} />
 			)}
@@ -429,11 +478,14 @@ export const BranchRow: FC<
 					<RowMeta>
 						{/* Only while folded: the count stands in for the commits it hides,
 						    so showing it alongside them would just be noise. */}
-						{isFolded && (
-							<span className={classes(rowStyles.fadedText, rowStyles.metaItem)}>
-								<Icon size={14} name="commit" />
-								{commitCount}
-							</span>
+						{isFolded && commitCount > 0 && (
+							<>
+								<span className={classes(rowStyles.fadedText, rowStyles.metaItem)}>
+									<Icon size={14} name="commit" />
+									{commitCount}
+								</span>
+								<RowMetaSeparator />
+							</>
 						)}
 
 						<span
@@ -455,25 +507,26 @@ export const BranchRow: FC<
 							</span>
 						</span>
 
-						{mforgeUrl != null && (
-							<a
-								href={mforgeUrl}
-								onClick={(evt) => void openPRInBrowser(evt)}
-								className={classes(rowStyles.fadedText, rowStyles.metaItem)}
-							>
-								<Icon size={14} name="pr" />
-								PR
-							</a>
-						)}
+						{/* The checks belong to the PR, so they ride alongside its label
+						    rather than standing as their own meta item. */}
+						{pullRequest !== null && (
+							<>
+								<RowMetaSeparator />
+								<span className={classes(rowStyles.fadedText, rowStyles.metaItem)}>
+									<Icon size={14} name="pr" />
+									PR
+								</span>
 
-						{ciChecks?.aggregate &&
-							(ciURL != null ? (
-								<a href={ciURL} onClick={(evt) => void openCIChecksInBrowser(evt)}>
-									<CIBubble checks={ciChecks.aggregate} />
-								</a>
-							) : (
-								<CIBubble checks={ciChecks.aggregate} />
-							))}
+								{ciChecks?.aggregate &&
+									(ciURL != null ? (
+										<a href={ciURL} onClick={(evt) => void openCIChecksInBrowser(evt)}>
+											<CIBubble checks={ciChecks.aggregate} />
+										</a>
+									) : (
+										<CIBubble checks={ciChecks.aggregate} />
+									))}
+							</>
+						)}
 
 						{downstackPushStatus.anyRequiresPush &&
 							(() => {
@@ -524,6 +577,7 @@ export const BranchRow: FC<
 													render={
 														<TooltipPopup
 															kbd={outlineHotkeys.workspaceBranchAndAncestorsPush.hotkey}
+															kbdScope="outline"
 														/>
 													}
 												>

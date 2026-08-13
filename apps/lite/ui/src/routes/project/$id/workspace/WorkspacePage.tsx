@@ -11,17 +11,17 @@ import { decodeBytes } from "#ui/api/bytes.ts";
 import {
 	focusHorizontalSelectionScope,
 	focusSelectionScope,
-	focusVerticalSelectionScope,
 	getFocusedSelectionScope,
 	type SelectionScope,
 } from "#ui/selection-scopes.ts";
 import { projectSlice } from "#ui/projects/state.ts";
 import { interfaceSlice } from "#ui/interface/state.ts";
 import { PickerDialog } from "#ui/components/PickerDialog.tsx";
+import { ResizeHandle } from "#ui/components/ResizeHandle.tsx";
 import { globalHotkeys, workspaceHotkeys } from "#ui/hotkeys.ts";
 import { writeLastOpenedProject } from "#ui/project.ts";
 import { useAppDispatch, useAppSelector } from "#ui/store.ts";
-import type { ProjectForFrontend, RefInfo, WorktreeChanges } from "@gitbutler/but-sdk";
+import type { ProjectForFrontend, RefInfo, TreeChange, WorktreeChanges } from "@gitbutler/but-sdk";
 import { useHotkey, useHotkeys, type UseHotkeyDefinition } from "@tanstack/react-hotkeys";
 import {
 	QueryErrorResetBoundary,
@@ -31,12 +31,11 @@ import {
 } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { Match } from "effect";
-import { type FC, Activity, useDeferredValue, useRef } from "react";
-import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
+import { type FC, Activity, useCallback, useDeferredValue, useMemo, useRef } from "react";
+import { Group, Panel, useDefaultLayout } from "react-resizable-panels";
 import {
 	branchOperand,
 	commitOperand,
-	fileOperand,
 	operandContains,
 	operandEquals,
 	operandIdentityKey,
@@ -45,9 +44,23 @@ import {
 	type Operand,
 	uncommittedChangesFileParent,
 } from "#ui/operands.ts";
-import { Details, type DiffViewerHandle } from "./Details.tsx";
+import {
+	BranchesDetails,
+	type DiffViewerHandle,
+	UncommittedFilesDetails,
+	UpstreamDetails,
+	WorkspaceDetails,
+} from "./Details.tsx";
 import { getDiffFileNavigation } from "./diff-view.ts";
 import { pathMatchesFilter } from "./file-row.ts";
+import {
+	buildFileTreeRows,
+	fileTreeNavigationIndex,
+	selectedFilePath,
+	type FileDisplayMode,
+	type FileTreeRow,
+} from "./file-tree.ts";
+import { useFileDisplayMode } from "./useFileDisplayMode.ts";
 import styles from "./WorkspacePage.module.css";
 import { useActiveElement } from "#ui/focus.ts";
 import { ApplyBranchPicker } from "./ApplyBranchPicker.tsx";
@@ -57,12 +70,20 @@ import { Outline } from "./Outline.tsx";
 import { getOperations } from "#ui/operations/operation.ts";
 import { buildIndexByKey, type NavigationIndex } from "#ui/workspace/navigation-index.ts";
 import { OperationControls } from "#ui/routes/project/$id/workspace/OperationControls.tsx";
-import { WorkspacePageErrorBoundary } from "./WorkspacePageErrorBoundary.tsx";
-import { Settings } from "./Settings.tsx";
+import { ErrorBoundary } from "#ui/components/ErrorBoundary.tsx";
+import { Settings } from "./Settings/Settings.tsx";
 import { useBranchesOutline } from "./useBranchesOutline.ts";
 import { useUpstreamOutline } from "./useUpstreamOutline.ts";
 import type { OutlineMode } from "#ui/outline/mode.ts";
 import { useStateReconciler as useReconcileState } from "#ui/reconcile.ts";
+import {
+	setCursor,
+	useCanShowFiles,
+	useOutlineSelectionScope,
+	usePage,
+	useResolvedCursor,
+	useWorkspaceList,
+} from "#ui/use-cursor.ts";
 import { defaultSettings } from "#ui/settings.ts";
 
 // This must be unique as to not collide with other IDs, and stable because it's
@@ -76,26 +97,36 @@ const useWorkspaceHotkeys = (projectId: string) => {
 	const filesVisibleState = useAppSelector((state) =>
 		projectSlice.selectors.selectFilesVisible(state, projectId),
 	);
-	const canShowFiles = useAppSelector((state) =>
-		projectSlice.selectors.selectCanShowFiles(state, projectId),
-	);
+	const canShowFiles = useCanShowFiles();
 	const activeElement = useActiveElement();
 	const focusedSelectionScope = getFocusedSelectionScope(activeElement);
 	const isDefaultMode = useAppSelector(
 		(state) => projectSlice.selectors.selectOutlineModeState(state, projectId)._tag === "Default",
 	);
 	const outlineVisible = !detailsFullWindow;
-	const outlineSelectionScope = useAppSelector((state) =>
-		projectSlice.selectors.selectDetailsSelectionScope(state, projectId),
-	);
+	const outlineSelectionScope = useOutlineSelectionScope();
 	const filesVisible = canShowFiles && filesVisibleState;
-	const outlineTab = useAppSelector((state) =>
-		projectSlice.selectors.selectOutlineTab(state, projectId),
-	);
+	const outlineTab = usePage();
 
 	const { isPending: isRestoreSnapshotPending, mutate: restoreSnapshot } = useRestoreSnapshot({
 		projectId,
 	});
+
+	// Shared by the arrow keys and their h/l aliases so the pairs cannot diverge.
+	const focusPane = (offset: -1 | 1) => {
+		focusHorizontalSelectionScope({
+			filesVisible,
+			offset,
+			outlineSelectionScope,
+			outlineVisible,
+		});
+	};
+	const focusPaneLeft = () => {
+		focusPane(-1);
+	};
+	const focusPaneRight = () => {
+		focusPane(1);
+	};
 
 	useHotkeys([
 		{
@@ -184,42 +215,28 @@ const useWorkspaceHotkeys = (projectId: string) => {
 		),
 		{
 			hotkey: workspaceHotkeys.focusHorizontalSelectionScopeLeft.hotkey,
-			callback: () => {
-				focusHorizontalSelectionScope({
-					filesVisible,
-					offset: -1,
-					outlineSelectionScope,
-					outlineVisible,
-				});
+			callback: focusPaneLeft,
+			options: {
+				conflictBehavior: "allow",
 			},
+		},
+		{
+			hotkey: "H",
+			callback: focusPaneLeft,
 			options: {
 				conflictBehavior: "allow",
 			},
 		},
 		{
 			hotkey: workspaceHotkeys.focusHorizontalSelectionScopeRight.hotkey,
-			callback: () => {
-				focusHorizontalSelectionScope({
-					filesVisible,
-					offset: 1,
-					outlineSelectionScope,
-					outlineVisible,
-				});
-			},
+			callback: focusPaneRight,
 			options: {
 				conflictBehavior: "allow",
 			},
 		},
 		{
-			hotkey: workspaceHotkeys.focusVerticalSelectionScopeUp.hotkey,
-			callback: () => focusVerticalSelectionScope(-1),
-			options: {
-				conflictBehavior: "allow",
-			},
-		},
-		{
-			hotkey: workspaceHotkeys.focusVerticalSelectionScopeDown.hotkey,
-			callback: () => focusVerticalSelectionScope(1),
+			hotkey: "L",
+			callback: focusPaneRight,
 			options: {
 				conflictBehavior: "allow",
 			},
@@ -232,19 +249,23 @@ const hasAnyOperation = (sources: Array<Operand>, target: Operand) => {
 	return !!operations.into || !!operations.above || !!operations.below;
 };
 
-const buildUncommittedFilesNavigationIndex = ({
+const buildUncommittedFileRows = ({
 	worktreeChanges,
 	filter,
+	mode,
+	collapsedDirectories,
 }: {
 	worktreeChanges: WorktreeChanges | undefined;
 	filter: string | null;
-}): NavigationIndex<string> => {
-	const items =
-		worktreeChanges?.changes.flatMap((change) =>
-			pathMatchesFilter(change.path, filter) ? change.path : [],
-		) ?? [];
-	return { items, indexByKey: buildIndexByKey(items, (path) => path) };
-};
+	mode: FileDisplayMode;
+	collapsedDirectories: Record<string, true>;
+}): Array<FileTreeRow<TreeChange>> =>
+	buildFileTreeRows({
+		items:
+			worktreeChanges?.changes.filter((change) => pathMatchesFilter(change.path, filter)) ?? [],
+		mode,
+		collapsedDirectories,
+	});
 
 const buildOutlineNavigationIndex = ({
 	headInfo,
@@ -369,22 +390,26 @@ const WorkspacePage: FC = () => {
 	// container, but that comes with other complexities and tradeoffs.
 	const didScrollToViaFileRef = useRef(false);
 
-	const onActiveFileSelection = (itemId: string, firstHunk: HunkOperand | null) => {
-		dispatch(
-			projectSlice.actions.selectDiff({
-				projectId,
-				selection: firstHunk,
-			}),
-		);
+	// useCallback, not compiler memoisation: the deferred details element below
+	// keys on this identity, so it must be stable by construction.
+	const onActiveFileSelection = useCallback(
+		(itemId: string, firstHunk: HunkOperand | null) => {
+			setCursor("diff", firstHunk);
 
-		if (renderAllFiles) {
-			didScrollToViaFileRef.current = true;
-			viewerRef.current?.scrollTo({
-				type: "item",
-				id: itemId,
-			});
-		}
-	};
+			if (renderAllFiles) {
+				didScrollToViaFileRef.current = true;
+				const viewer = viewerRef.current?.getInstance();
+				// Details selection is deferred, so the ref may still point at a viewer without this file.
+				if (!viewer?.getItem(itemId)) return;
+
+				viewer.scrollTo({
+					type: "item",
+					id: itemId,
+				});
+			}
+		},
+		[renderAllFiles],
+	);
 
 	const detailsFullWindow = useAppSelector(interfaceSlice.selectors.selectDetailsFullWindow);
 	const dialog = useAppSelector(interfaceSlice.selectors.selectDialogState);
@@ -395,12 +420,7 @@ const WorkspacePage: FC = () => {
 	useWorkspaceHotkeys(projectId);
 
 	const selectBranch = (branch: BranchOperand) => {
-		dispatch(
-			projectSlice.actions.selectOutline({
-				projectId,
-				selection: branchOperand(branch),
-			}),
-		);
+		setCursor("stacks", branchOperand(branch));
 		focusSelectionScope("outline");
 	};
 
@@ -491,38 +511,31 @@ const WorkspacePage: FC = () => {
 		foldedSegments,
 	});
 
-	const outlineTab = useAppSelector((state) =>
-		projectSlice.selectors.selectOutlineTab(state, projectId),
-	);
+	const outlineTab = usePage();
 	const branchesOutline = useBranchesOutline(projectId);
 	const upstreamOutline = useUpstreamOutline(projectId);
 
-	const outlineSelection = useAppSelector((state) =>
-		projectSlice.selectors.selectSelectionOutline(state, projectId, outlineNavigationIndex),
-	);
-	const branchesSelection = useAppSelector((state) =>
-		projectSlice.selectors.selectSelectionBranches(
-			state,
-			projectId,
-			branchesOutline.navigationIndex,
-		),
-	);
-	const upstreamSelection = useAppSelector((state) =>
-		projectSlice.selectors.selectSelectionUpstream(
-			state,
-			projectId,
-			upstreamOutline.navigationIndex,
-		),
-	);
+	const outlineSelection = useResolvedCursor("stacks", outlineNavigationIndex);
+	const branchesSelection = useResolvedCursor("branches", branchesOutline.navigationIndex);
+	const upstreamSelection = useResolvedCursor("upstream", upstreamOutline.navigationIndex);
 
 	const { data: worktreeChanges } = useQuery(changesInWorktreeQueryOptions(projectId));
 	const uncommittedFilesFilter = useAppSelector((state) =>
 		projectSlice.selectors.selectUncommittedFilesFilter(state, projectId),
 	);
-	const uncommittedFilesNavigationIndex = buildUncommittedFilesNavigationIndex({
+	const uncommittedFilesDisplayMode = useFileDisplayMode();
+	const uncommittedFilesCollapsedDirectories = useAppSelector((state) =>
+		projectSlice.selectors.selectUncommittedFilesCollapsedDirectories(state, projectId),
+	);
+	const uncommittedFileRows = buildUncommittedFileRows({
 		worktreeChanges,
 		filter: uncommittedFilesFilter,
+		mode: uncommittedFilesDisplayMode,
+		collapsedDirectories: uncommittedFilesCollapsedDirectories,
 	});
+	// Directories take the cursor as files do, so the index follows the layout the
+	// list renders — and a collapsed directory takes its files out of it too.
+	const uncommittedFilesNavigationIndex = fileTreeNavigationIndex(uncommittedFileRows);
 	const uncommittedTreeChangeDiffs = useQueries({
 		queries:
 			worktreeChanges?.changes.map((change) =>
@@ -536,9 +549,12 @@ const WorkspacePage: FC = () => {
 	});
 
 	const onActiveUncommittedFileSelection = (selection: string) => {
+		// A directory row stands for the first file below it, so activating a
+		// folder still gives the details pane somewhere to go.
+		const path = selectedFilePath(uncommittedFileRows, selection);
 		// Indexed against the worktree changes rather than the navigation index,
 		// which the file filter can narrow out from under them.
-		const index = worktreeChanges?.changes.findIndex((change) => change.path === selection) ?? -1;
+		const index = worktreeChanges?.changes.findIndex((change) => change.path === path) ?? -1;
 		const change = index === -1 ? undefined : worktreeChanges?.changes[index];
 		const treeChangeDiff = index === -1 ? undefined : uncommittedTreeChangeDiffs?.[index];
 		const navigation =
@@ -550,42 +566,80 @@ const WorkspacePage: FC = () => {
 					})
 				: null;
 
-		dispatch(projectSlice.actions.selectUncommittedFiles({ projectId, selection }));
+		setCursor("uncommitted", selection);
 		if (navigation) onActiveFileSelection(navigation.itemId, navigation.firstHunk);
 	};
 
-	const uncommittedFilesSelection = useAppSelector((state) =>
-		projectSlice.selectors.selectSelectionUncommittedFiles(
-			state,
-			projectId,
-			uncommittedFilesNavigationIndex,
-		),
+	const uncommittedFilesSelection = useResolvedCursor(
+		"uncommitted",
+		uncommittedFilesNavigationIndex,
 	);
 
-	const detailsSelectionScope = useAppSelector((state) =>
-		projectSlice.selectors.selectDetailsSelectionScope(state, projectId),
-	);
-	const detailsSelection = Match.value(detailsSelectionScope).pipe(
-		Match.when("outline", () =>
-			Match.value(outlineTab).pipe(
-				Match.when("workspace", () => outlineSelection),
-				Match.when("upstream", () => upstreamSelection),
-				Match.when("branches", () => branchesSelection),
-				Match.exhaustive,
+	const workspaceList = useWorkspaceList();
+	// The pane's content is one component per page, as the outline has one list
+	// per tab — the component tree, not a tag on the selection, carries where a
+	// selection came from. Only the workspace page has two lists, so only its arm
+	// asks which one drives. Memoised because `useDeferredValue` compares by
+	// identity, so a freshly built element every render would defer every render.
+	const details = useMemo(() => {
+		const viewProps = { onActiveFileSelection, viewerRef, didScrollToViaFileRef };
+
+		return Match.value(outlineTab).pipe(
+			Match.when("workspace", () =>
+				Match.value(workspaceList).pipe(
+					Match.when("stacks", () => (
+						<WorkspaceDetails selection={outlineSelection} {...viewProps} />
+					)),
+					Match.when(
+						"uncommitted",
+						() =>
+							uncommittedFilesSelection !== null && (
+								<UncommittedFilesDetails path={uncommittedFilesSelection} {...viewProps} />
+							),
+					),
+					Match.exhaustive,
+				),
 			),
-		),
-		Match.when("uncommitted-files", () =>
-			uncommittedFilesSelection === null
-				? null
-				: fileOperand({ parent: uncommittedChangesFileParent, path: uncommittedFilesSelection }),
-		),
-		Match.when(null, () => null),
-		Match.exhaustive,
-	);
+			Match.when("upstream", () => (
+				<UpstreamDetails selection={upstreamSelection} {...viewProps} />
+			)),
+			Match.when("branches", () => (
+				<BranchesDetails selection={branchesSelection} {...viewProps} />
+			)),
+			Match.exhaustive,
+		);
+	}, [
+		branchesSelection,
+		onActiveFileSelection,
+		outlineSelection,
+		outlineTab,
+		uncommittedFilesSelection,
+		upstreamSelection,
+		workspaceList,
+	]);
 
-	const deferredDetailsSelection = useDeferredValue(detailsSelection);
+	const deferredDetails = useDeferredValue(details);
 
 	const { data: projects } = useSuspenseQuery(listProjectsQueryOptions);
+	const project = projects.find((candidate) => candidate.id === projectId);
+	// Names the project group in settings. The route has already established it resolves.
+	const projectName = project?.title ?? "";
+	// Resolved here rather than in the handler, so the hotkey can disable itself when
+	// there is no terminal chosen yet rather than failing on activation.
+	const { data: terminalId } = useQuery({
+		...guiSettingsQueryOptions,
+		select: (cfg) => cfg.terminalId ?? "",
+	});
+
+	const canOpenTerminal = project !== undefined && terminalId !== undefined && terminalId !== "";
+	useHotkey(
+		workspaceHotkeys.openInTerminal.hotkey,
+		() => {
+			if (!canOpenTerminal) return;
+			void window.lite.openInTerminal({ terminalId, path: project.path });
+		},
+		{ enabled: canOpenTerminal, meta: workspaceHotkeys.openInTerminal.meta },
+	);
 
 	useHotkey(globalHotkeys.selectProject.hotkey, openProjectPicker, {
 		enabled: projects.length > 0,
@@ -623,18 +677,22 @@ const WorkspacePage: FC = () => {
 						defaultSize={420}
 						groupResizeBehavior="preserve-pixel-size"
 					>
-						<Outline
-							projectId={projectId}
-							project={selectedProject}
-							branchesOutline={branchesOutline}
-							upstreamOutline={upstreamOutline}
-							navigationIndex={outlineNavigationIndex}
-							uncommittedFilesNavigationIndex={uncommittedFilesNavigationIndex}
-							absorptionTargetCommitIds={absorptionTargetCommitIds}
-							onActiveFileSelection={onActiveUncommittedFileSelection}
-						/>
+						{/* No reset key: the child is built inline, so its identity changes
+						    every render. Recovery here is the fallback's Retry button. */}
+						<ErrorBoundary>
+							<Outline
+								projectId={projectId}
+								project={selectedProject}
+								branchesOutline={branchesOutline}
+								upstreamOutline={upstreamOutline}
+								navigationIndex={outlineNavigationIndex}
+								uncommittedFilesNavigationIndex={uncommittedFilesNavigationIndex}
+								absorptionTargetCommitIds={absorptionTargetCommitIds}
+								onActiveFileSelection={onActiveUncommittedFileSelection}
+							/>
+						</ErrorBoundary>
 					</Panel>
-					<Separator className={styles.resizeHandle} />
+					<ResizeHandle />
 				</Activity>
 
 				<Panel
@@ -642,12 +700,10 @@ const WorkspacePage: FC = () => {
 					className={styles.panel}
 					data-selection-scope={"details" satisfies SelectionScope}
 				>
-					<Details
-						selection={deferredDetailsSelection}
-						onActiveFileSelection={onActiveFileSelection}
-						viewerRef={viewerRef}
-						didScrollToViaFileRef={didScrollToViaFileRef}
-					/>
+					{/* Keyed on the deferred view itself, not on the URL: the deferred
+					    value still holds the old view for a beat after navigating, so a
+					    URL key would clear the error onto the element that just threw. */}
+					<ErrorBoundary resetKeys={[deferredDetails]}>{deferredDetails}</ErrorBoundary>
 				</Panel>
 			</Group>
 
@@ -671,7 +727,14 @@ const WorkspacePage: FC = () => {
 							onOpenChange={setProjectPickerOpen}
 						/>
 					),
-					Settings: () => <Settings open onOpenChange={setSettingsOpen} />,
+					Settings: () => (
+						<Settings
+							open
+							projectId={projectId}
+							projectName={projectName}
+							onOpenChange={setSettingsOpen}
+						/>
+					),
 				}),
 			)}
 		</>
@@ -688,9 +751,9 @@ export const Route: FC = () => {
 	return (
 		<QueryErrorResetBoundary>
 			{({ reset }) => (
-				<WorkspacePageErrorBoundary onReset={reset}>
+				<ErrorBoundary onReset={reset}>
 					<WorkspacePage />
-				</WorkspacePageErrorBoundary>
+				</ErrorBoundary>
 			)}
 		</QueryErrorResetBoundary>
 	);

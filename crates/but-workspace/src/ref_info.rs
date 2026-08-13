@@ -105,30 +105,14 @@ impl Commit {
 
     /// A special constructor for very specific case.
     pub(crate) fn from_commit_ahead_of_workspace_commit(
-        commit: gix::objs::Commit,
+        commit: but_core::Commit<'_>,
         graph_commit: &but_graph::Commit,
     ) -> Self {
-        let hdr = but_core::commit::Headers::try_from_commit(&commit);
-        let has_conflicts = but_core::commit::is_conflicted(commit.message.as_ref(), hdr.as_ref());
-        let message = but_core::commit::strip_conflict_markers(commit.message.as_ref());
         Commit {
             id: graph_commit.id,
-            parent_ids: commit.parents.into_iter().collect(),
-            tree_id: commit.tree,
-            message,
-            has_conflicts,
-            author: commit
-                .author
-                .to_ref(&mut gix::date::parse::TimeBuf::default())
-                .into(),
-            committer: commit
-                .committer
-                .to_ref(&mut gix::date::parse::TimeBuf::default())
-                .into(),
             refs: graph_commit.refs.clone(),
             flags: graph_commit.flags.into(),
-            change_id: hdr.and_then(|hdr| hdr.change_id),
-            gerrit_review_url: None,
+            ..commit.into()
         }
     }
 }
@@ -510,7 +494,10 @@ pub(crate) fn find_ancestor_workspace_commit(
             }
             commits_outside.push(
                 crate::ref_info::Commit::from_commit_ahead_of_workspace_commit(
-                    commit.inner,
+                    but_core::Commit {
+                        id: commit.id,
+                        inner: commit.inner,
+                    },
                     graph_commit,
                 ),
             );
@@ -569,6 +556,14 @@ pub fn graph_to_ref_info(
         WorkspaceKind::AdHoc => (graph[*id].ref_info.as_ref(), false, None),
     };
     let is_entrypoint = graph.entrypoint()?.segment.id == *id;
+    // Ask the repo where the ref points and compare the stored id itself: the graph
+    // may drop `target_commit` and may leave the ref's own segment without commits.
+    let is_target_current = match (target_ref, graph.project_meta.target_commit_id) {
+        (Some(tr), Some(stored)) => repo
+            .try_find_reference(tr.ref_name.as_ref())?
+            .is_some_and(|mut r| r.peel_to_id().is_ok_and(|id| id == stored)),
+        _ => false,
+    };
     let mut info = RefInfo {
         workspace_ref_info: workspace_ref_info.cloned(),
         symbolic_remote_names: repo.remote_names().into_iter().collect(),
@@ -579,6 +574,7 @@ pub fn graph_to_ref_info(
             .collect::<anyhow::Result<_>>()?,
         target_ref: target_ref.clone(),
         target_commit: target_commit.clone(),
+        is_target_current,
         is_managed_ref: metadata.is_some(),
         is_managed_commit,
         ancestor_workspace_commit,

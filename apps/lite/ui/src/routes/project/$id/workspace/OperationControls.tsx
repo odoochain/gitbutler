@@ -1,4 +1,5 @@
 import { useAbsorb } from "#ui/api/mutations.ts";
+import { cancelMode, useResolvedCursor, useWorkspaceList } from "#ui/use-cursor.ts";
 import { absorptionPlanQueryOptions, headInfoQueryOptions } from "#ui/api/queries.ts";
 import { getHeadInfoIndex, type HeadInfoIndex } from "#ui/api/ref-info.ts";
 import { getButtonClassName } from "#ui/components/Button.tsx";
@@ -144,6 +145,8 @@ const CheckedOperandOperationControls: FC<{ checkedOperandCount: number; project
 				return "commit";
 			case "File":
 				return "file";
+			case "Hunk":
+				return "hunk";
 			case null:
 				return null;
 		}
@@ -188,7 +191,7 @@ const AbsorbOperationControls: FC<{
 	};
 
 	const cancel = () => {
-		dispatch(projectSlice.actions.cancelMode({ projectId }));
+		cancelMode();
 	};
 
 	return (
@@ -298,17 +301,13 @@ const TransferKeyboardOperationControls: FC<{
 	mode: KeyboardTransferMode;
 	outlineNavigationIndex: NavigationIndex<Operand>;
 }> = ({ headInfoIndex, projectId, mode, outlineNavigationIndex }) => {
-	const detailsSelectionScope = useAppSelector((state) =>
-		projectSlice.selectors.selectDetailsSelectionScope(state, projectId),
-	);
-	const selection = useAppSelector((state) =>
-		projectSlice.selectors.selectSelectionOutline(state, projectId, outlineNavigationIndex),
-	);
+	const workspaceList = useWorkspaceList();
+	const selection = useResolvedCursor("stacks", outlineNavigationIndex);
 
 	const dispatch = useAppDispatch();
 	const { mutate: executeOperation } = useExecuteOperation();
 
-	const target = getTransferTarget(keyboardTransferMode(mode), selection, detailsSelectionScope);
+	const target = getTransferTarget(keyboardTransferMode(mode), selection, workspaceList);
 	if (!target) return null;
 
 	const operations = getOperations(mode.sources, target);
@@ -323,7 +322,7 @@ const TransferKeyboardOperationControls: FC<{
 	};
 
 	const cancel = () => {
-		dispatch(projectSlice.actions.cancelMode({ projectId }));
+		cancelMode();
 	};
 
 	return (

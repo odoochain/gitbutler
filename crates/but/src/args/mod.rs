@@ -332,6 +332,8 @@ pub enum Subcommands {
     ///
     /// To apply or unapply branches, use `but apply` and `but unapply`.
     ///
+    /// To rename an applied branch, use `but reword <branch> -m <new-name>`.
+    ///
     #[cfg_attr(feature = "raw-clap-docs", clap(verbatim_doc_comment))]
     Branch(branch::Platform),
 
@@ -443,6 +445,10 @@ pub enum Subcommands {
     #[cfg(feature = "legacy")]
     #[cfg_attr(feature = "raw-clap-docs", clap(verbatim_doc_comment))]
     Apply(apply::Platform),
+
+    #[cfg(feature = "legacy")]
+    #[cfg_attr(feature = "raw-clap-docs", clap(verbatim_doc_comment))]
+    Open(open::Platform),
 
     /// Push changes in a branch to remote.
     ///
@@ -951,7 +957,7 @@ pub enum Subcommands {
     /// the same time, or for isolating changes in different workspaces.
     ///
     #[cfg(feature = "legacy")]
-    #[clap(hide = true)]
+    #[clap(hide = true, alias = "wt")]
     #[cfg_attr(feature = "raw-clap-docs", clap(verbatim_doc_comment))]
     Worktree(worktree::Platform),
 
@@ -1081,6 +1087,8 @@ pub mod discard;
 pub mod mcp;
 #[cfg(feature = "legacy")]
 pub mod r#move;
+#[cfg(feature = "legacy")]
+pub mod open;
 #[cfg(feature = "legacy")]
 pub mod pick;
 #[cfg(feature = "legacy")]

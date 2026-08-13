@@ -1,4 +1,5 @@
 import { headInfoQueryOptions } from "#ui/api/queries.ts";
+import { cancelMode } from "#ui/use-cursor.ts";
 import { getHeadInfoIndex } from "#ui/api/ref-info.ts";
 import { hunkOperand, type HunkOperand } from "#ui/operands.ts";
 import { pointerTransferMode } from "#ui/outline/mode.ts";
@@ -124,7 +125,13 @@ export const useDiffHunkDrag = <T>({
 			if (!target) return null;
 
 			const operand = configRef.current.getHunkOperand(target);
-			return operand ? [hunkOperand(operand)] : null;
+			if (!operand) return null;
+
+			const source = hunkOperand(operand);
+			const state = store.getState();
+			return projectSlice.selectors.selectOperandChecked(state, projectId, source)
+				? projectSlice.selectors.selectCheckedOperands(state, projectId)
+				: [source];
 		};
 
 		registration.cleanup = draggable({
@@ -171,8 +178,7 @@ export const useDiffHunkDrag = <T>({
 			onDrop: ({ location }) => {
 				if (location.current.dropTargets.length > 0) return;
 
-				const config = configRef.current;
-				config.dispatch(projectSlice.actions.cancelMode({ projectId: config.projectId }));
+				cancelMode();
 			},
 		});
 

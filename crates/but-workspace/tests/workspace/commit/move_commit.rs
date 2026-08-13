@@ -63,7 +63,8 @@ fn move_top_commit_to_top_of_another_stack() -> anyhow::Result<()> {
 "#]]
     );
 
-    let editor = Editor::create(&mut ws, &mut meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut meta, &repo, &mut db)?;
     let a_commit = repo.rev_parse_single("A")?.detach();
     let b_commit = repo.rev_parse_single("B")?.detach();
     let c_commit = repo.rev_parse_single("C")?.detach();
@@ -173,7 +174,8 @@ fn move_bottom_commit_to_top_of_another_stack() -> anyhow::Result<()> {
 "#]]
     );
 
-    let editor = Editor::create(&mut ws, &mut meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut meta, &repo, &mut db)?;
     let a_commit = repo.rev_parse_single("A")?.detach();
     let b_commit = repo.rev_parse_single("B")?.detach();
     let c_commit = repo.rev_parse_single("C")?.detach();
@@ -285,7 +287,8 @@ fn move_top_commit_to_bottom_of_another_stack() -> anyhow::Result<()> {
 "#]]
     );
 
-    let editor = Editor::create(&mut ws, &mut meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut meta, &repo, &mut db)?;
     let a_commit = repo.rev_parse_single("A")?.detach();
     let b_commit = repo.rev_parse_single("B")?.detach();
     let c_commit = repo.rev_parse_single("C")?.detach();
@@ -395,7 +398,8 @@ fn move_bottom_commit_to_bottom_of_another_stack() -> anyhow::Result<()> {
 "#]]
     );
 
-    let editor = Editor::create(&mut ws, &mut meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut meta, &repo, &mut db)?;
     let a_commit = repo.rev_parse_single("A")?.detach();
     let b_commit = repo.rev_parse_single("B")?.detach();
     let c_commit = repo.rev_parse_single("C")?.detach();
@@ -507,7 +511,8 @@ fn move_single_commit_to_the_top_of_another_branch() -> anyhow::Result<()> {
 "#]]
     );
 
-    let editor = Editor::create(&mut ws, &mut meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut meta, &repo, &mut db)?;
     let a_commit = repo.rev_parse_single("A")?.detach();
     let c_commit = repo.rev_parse_single("C")?.detach();
 
@@ -610,7 +615,8 @@ fn move_single_commit_to_the_bottom_of_another_branch() -> anyhow::Result<()> {
 "#]]
     );
 
-    let editor = Editor::create(&mut ws, &mut meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut meta, &repo, &mut db)?;
     let a_commit = repo.rev_parse_single("A")?.detach();
     let b_commit = repo.rev_parse_single("B")?.detach();
     let c_commit = repo.rev_parse_single("C")?.detach();
@@ -714,7 +720,8 @@ fn move_commit_to_empty_branch() -> anyhow::Result<()> {
 "#]]
     );
 
-    let editor = Editor::create(&mut ws, &mut meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut meta, &repo, &mut db)?;
     let a_commit = repo.rev_parse_single("A")?.detach();
 
     // Put A commit in branch B
@@ -797,7 +804,8 @@ fn move_commit_in_non_managed_workspace() -> anyhow::Result<()> {
 "#]]
     );
 
-    let editor = Editor::create(&mut ws, &mut meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut meta, &repo, &mut db)?;
     let three_commit = repo.rev_parse_single("three")?.detach();
 
     // Put commit three at the top of branch two
@@ -880,19 +888,20 @@ fn reorder_merge_commit_above_keeps_child_commits_visible() -> anyhow::Result<()
     snapbox::assert_data_eq!(
         graph_workspace(&ws).to_string(),
         snapbox::str![[r#"
-⌂:0:child-stack[🌳] <> ✓refs/remotes/origin/main on aa67ae0
-└── ≡:0:child-stack[🌳] on aa67ae0 {1}
-    ├── :0:child-stack[🌳]
+⌂:[..]:child-stack[🌳] <> ✓refs/remotes/origin/main on aa67ae0
+└── ≡:[..]:child-stack[🌳] on aa67ae0 {1}
+    ├── :[..]:child-stack[🌳]
     │   └── ·32c8bda ►C2
-    ├── :3:C1
+    ├── :[..]:C1
     │   └── ·64dace5
-    └── :4:M
+    └── :[..]:M
         └── ·197bdf1
 
 "#]]
     );
 
-    let editor = Editor::create(&mut ws, &mut meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut meta, &repo, &mut db)?;
     let merge_commit = repo.rev_parse_single("M")?.detach();
     let c1_commit = repo.rev_parse_single("C1")?.detach();
 
@@ -964,19 +973,20 @@ fn reorder_merge_commit_below_keeps_child_commits_visible() -> anyhow::Result<()
     snapbox::assert_data_eq!(
         graph_workspace(&ws).to_string(),
         snapbox::str![[r#"
-⌂:0:child-stack[🌳] <> ✓refs/remotes/origin/main on aa67ae0
-└── ≡:0:child-stack[🌳] on aa67ae0 {1}
-    ├── :0:child-stack[🌳]
+⌂:[..]:child-stack[🌳] <> ✓refs/remotes/origin/main on aa67ae0
+└── ≡:[..]:child-stack[🌳] on aa67ae0 {1}
+    ├── :[..]:child-stack[🌳]
     │   └── ·32c8bda ►C2
-    ├── :3:C1
+    ├── :[..]:C1
     │   └── ·64dace5
-    └── :4:M
+    └── :[..]:M
         └── ·197bdf1
 
 "#]]
     );
 
-    let editor = Editor::create(&mut ws, &mut meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut meta, &repo, &mut db)?;
     let merge_commit = repo.rev_parse_single("M")?.detach();
     let main_commit = repo.rev_parse_single("main")?.detach();
 
@@ -1051,7 +1061,8 @@ fn reorder_commit_in_non_managed_workspace() -> anyhow::Result<()> {
 "#]]
     );
 
-    let editor = Editor::create(&mut ws, &mut meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut meta, &repo, &mut db)?;
     let three_commit = repo.rev_parse_single("three")?.detach();
     let two_commit = repo.rev_parse_single("two")?.detach();
 
@@ -1154,7 +1165,8 @@ fn move_mixed_main_and_worktree_commits_to_another_worktree() -> anyhow::Result<
     let main = repo.rev_parse_single("main")?.detach();
     let feat = repo.rev_parse_single("feat")?.detach();
     let mut ws = graph.into_workspace()?;
-    let editor = Editor::create(&mut ws, &mut *meta, &repo)?;
+    let mut db = but_testsupport::in_memory_db();
+    let editor = Editor::create(&mut ws, &mut *meta, &repo, &mut db)?;
     but_workspace::commit::move_commits(
         editor,
         [main, feat],

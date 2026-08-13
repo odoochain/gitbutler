@@ -1,5 +1,7 @@
 import { useDiscardWorktreeChanges } from "#ui/api/mutations.ts";
+import { enterAbsorb, enterKeyboardTransfer } from "#ui/use-cursor.ts";
 import { Icon } from "#ui/components/Icon.tsx";
+import { SelectionScopeKbd } from "#ui/components/SelectionScopeKbd.tsx";
 import { createDiffSpec } from "#ui/operations/diff-specs.ts";
 import {
 	nativeMenuItem,
@@ -12,13 +14,14 @@ import { uncommittedChangesOperand, type Operand } from "#ui/operands.ts";
 import { projectSlice } from "#ui/projects/state.ts";
 import { getLineStats } from "#ui/routes/project/$id/workspace/lineStats.ts";
 import { focusSelectionScope } from "#ui/selection-scopes.ts";
-import { useAppDispatch, useAppSelector } from "#ui/store.ts";
+import { useAppSelector } from "#ui/store.ts";
 import { Toolbar } from "@base-ui/react";
 import type { AbsorptionTarget, TreeChange } from "@gitbutler/but-sdk";
 import type { FC } from "react";
 import { getRowButtonClassName } from "../Row-utils.ts";
 import { ChangeStats } from "../ChangeStats.tsx";
 import { RowToolbar, SectionHeaderRow } from "../Row.tsx";
+import { useFileDisplayModeMenuItems } from "../useFileDisplayModeMenuItems.ts";
 import { useQueries } from "@tanstack/react-query";
 import { treeChangeDiffsQueryOptions } from "#ui/api/queries.ts";
 
@@ -38,10 +41,10 @@ export const UncommittedChangesRow: FC<{
 	);
 	const { isPending: isDiscardWorktreeChangesPending, mutate: discardWorktreeChanges } =
 		useDiscardWorktreeChanges();
+	const fileDisplayModeMenuItems = useFileDisplayModeMenuItems();
 
-	const dispatch = useAppDispatch();
 	const enterAbsorbMode = (source: Operand, sourceTarget: AbsorptionTarget) => {
-		dispatch(projectSlice.actions.enterAbsorbMode({ projectId, source, sourceTarget }));
+		enterAbsorb({ source, sourceTarget });
 	};
 
 	const absorb = () => {
@@ -49,19 +52,14 @@ export const UncommittedChangesRow: FC<{
 	};
 
 	const cutChanges = () => {
-		dispatch(
-			projectSlice.actions.enterKeyboardTransferMode({
-				projectId,
-				sources: [operand],
-			}),
-		);
+		enterKeyboardTransfer({ sources: [operand] });
 		focusSelectionScope("outline");
 	};
 
 	const discardChanges = () => {
 		discardWorktreeChanges({
 			projectId,
-			changes: changes.map((change) => createDiffSpec(change, [])),
+			worktreeChanges: changes.map((change) => createDiffSpec(change, [])),
 		});
 	};
 
@@ -81,11 +79,14 @@ export const UncommittedChangesRow: FC<{
 			enabled: changes.length > 0 && !isDiscardWorktreeChangesPending,
 			onSelect: discardChanges,
 		}),
+		nativeMenuSeparator,
+		...fileDisplayModeMenuItems,
 	];
 
 	return (
 		<SectionHeaderRow
 			label="Uncommitted"
+			childrenBefore={<SelectionScopeKbd hotkey="1" scope="uncommitted-files" />}
 			onContextMenu={(event) => {
 				void showNativeContextMenu(event, menuItems);
 			}}

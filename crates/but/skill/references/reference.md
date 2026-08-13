@@ -4,7 +4,7 @@ Agent-focused reference for useful `but` commands.
 
 ## Contents
 
-- [Inspection](#inspection-understanding-state) - `status`, `show`, `diff`
+- [Inspection](#inspection-understanding-state) - `status`, `show`, `diff`, `open`
 - [Branching](#branching) - `branch new`, `apply`, `unapply`, `branch delete`, `pick`
 - [Committing](#committing) - `commit`
 - [Editing History](#editing-history) - `squash`, `amend`, `move`, `uncommit`, `reword`, `discard`
@@ -65,6 +65,20 @@ inspect committed files or other entities one target at a time. Unlike `commit`,
 
 For the full CLI ID model, `but help cli-ids` documents every ID kind and its stability.
 
+### `but open [target]`
+
+Open the GitButler app at a branch or commit, or print the link with `--print`.
+
+```bash
+but open                    # The workspace
+but open <branch-id>        # With that branch selected
+but open <commit-id>        # With that commit selected
+but open --print <id>       # Print the link instead of opening it
+```
+
+Commits are addressed by change ID where they have one, so the link keeps
+working after the commit is amended or rebased.
+
 ## Branching
 
 ### `but branch`
@@ -82,6 +96,8 @@ but branch list -a      # Show all branches (not just active + 20 most recent)
 but branch list --empty  # Include empty branches
 but branch list --review  # Fetch and display review information
 ```
+
+To rename an applied branch, use `but reword <branch> -m "new-name"` (unapplied branches cannot be renamed).
 
 ### `but branch new [name]`
 
@@ -294,6 +310,7 @@ Reword commit message or rename branch.
 
 ```bash
 but reword <id> -m "new"          # Always pass -m; without it an editor opens and blocks
+but reword <branch> -m "new-name" # Rename a branch (applied branches only)
 but reword <id> --fix-formatting  # Format to 72-char wrapping
 ```
 

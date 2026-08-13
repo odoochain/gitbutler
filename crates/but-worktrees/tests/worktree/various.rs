@@ -23,7 +23,7 @@ fn create_unrelated_change_and_reintroduce() -> anyhow::Result<()> {
 
     assert_eq!(
         integration_status(
-            &ctx,
+            &mut ctx,
             guard.write_permission(),
             &a.created.id,
             feature_a_name.as_ref()
@@ -37,7 +37,7 @@ fn create_unrelated_change_and_reintroduce() -> anyhow::Result<()> {
     );
     assert_eq!(
         integration_status(
-            &ctx,
+            &mut ctx,
             guard.write_permission(),
             &a.created.id,
             feature_b_name.as_ref()
@@ -51,7 +51,7 @@ fn create_unrelated_change_and_reintroduce() -> anyhow::Result<()> {
     );
 
     integrate(
-        &ctx,
+        &mut ctx,
         guard.write_permission(),
         &a.created.id,
         feature_a_name.as_ref(),
@@ -112,7 +112,7 @@ fn causes_conflicts_above() -> anyhow::Result<()> {
 
     assert_eq!(
         integration_status(
-            &ctx,
+            &mut ctx,
             guard.write_permission(),
             &a.created.id,
             feature_a_name.as_ref()
@@ -126,7 +126,7 @@ fn causes_conflicts_above() -> anyhow::Result<()> {
     );
     assert_eq!(
         integration_status(
-            &ctx,
+            &mut ctx,
             guard.write_permission(),
             &a.created.id,
             feature_b_name.as_ref()
@@ -140,7 +140,7 @@ fn causes_conflicts_above() -> anyhow::Result<()> {
     );
 
     integrate(
-        &ctx,
+        &mut ctx,
         guard.write_permission(),
         &a.created.id,
         feature_a_name.as_ref(),
@@ -201,7 +201,7 @@ fn causes_workdir_conflicts_simple() -> anyhow::Result<()> {
 
     assert_eq!(
         integration_status(
-            &ctx,
+            &mut ctx,
             guard.write_permission(),
             &b.created.id,
             feature_b_name.as_ref()
@@ -214,34 +214,26 @@ fn causes_workdir_conflicts_simple() -> anyhow::Result<()> {
         "In this case, we're putting a new commit on the top of the stack - the thing that should conflict is the working directory"
     );
 
-    let feature_b_tip_before = ctx
-        .repo
-        .get()?
-        .find_reference(feature_b_name.as_ref())?
-        .id()
-        .detach();
-    let err = integrate(
-        &ctx,
+    integrate(
+        &mut ctx,
         guard.write_permission(),
         &b.created.id,
         feature_b_name.as_ref(),
     )
-    .expect_err("integration aborts instead of clobbering uncommitted changes");
-    assert!(
-        format!("{err:#}").contains("Failed to integrate worktree"),
-        "unexpected error: {err:#}"
-    );
+    .expect("it works");
 
     let foo = std::fs::read_to_string(main_worktree_dir.join("foo.txt"))?;
-    snapbox::assert_data_eq!(foo.into_bytes(), snapbox::Data::binary(b"qux\n"));
-    assert_eq!(
-        ctx.repo
-            .get()?
-            .find_reference(feature_b_name.as_ref())?
-            .id()
-            .detach(),
-        feature_b_tip_before,
-        "an aborted integration must not move any refs"
+    snapbox::assert_data_eq!(
+        foo,
+        snapbox::str![[r#"
+<<<<<<< ours
+qux
+...
+=======
+foo
+>>>>>>> theirs
+
+"#]]
     );
 
     Ok(())
@@ -266,7 +258,7 @@ fn causes_workdir_conflicts_complex() -> anyhow::Result<()> {
     );
     assert_eq!(
         integration_status(
-            &ctx,
+            &mut ctx,
             guard.write_permission(),
             &a.created.id,
             feature_a_name.as_ref()
@@ -280,7 +272,7 @@ fn causes_workdir_conflicts_complex() -> anyhow::Result<()> {
     );
     assert_eq!(
         integration_status(
-            &ctx,
+            &mut ctx,
             guard.write_permission(),
             &a.created.id,
             feature_b_name.as_ref()
@@ -294,15 +286,26 @@ fn causes_workdir_conflicts_complex() -> anyhow::Result<()> {
     );
 
     integrate(
-        &ctx,
+        &mut ctx,
         guard.write_permission(),
         &a.created.id,
         feature_a_name.as_ref(),
     )
-    .expect_err("integration aborts instead of clobbering uncommitted changes");
+    .expect("it works");
 
     let foo = std::fs::read_to_string(main_worktree_dir.join("foo.txt"))?;
-    snapbox::assert_data_eq!(foo.into_bytes(), snapbox::Data::binary(b"qux\n"));
+    snapbox::assert_data_eq!(
+        foo,
+        snapbox::str![[r#"
+<<<<<<< ours
+qux
+...
+=======
+foo
+>>>>>>> theirs
+
+"#]]
+    );
 
     Ok(())
 }
@@ -323,7 +326,7 @@ fn fresh_worktree_does_not_obscure_its_branch() -> anyhow::Result<()> {
 
     assert_eq!(
         integration_status(
-            &ctx,
+            &mut ctx,
             guard.write_permission(),
             &a.created.id,
             feature_a_name.as_ref()
@@ -357,7 +360,7 @@ fn causes_workspace_conflict() -> anyhow::Result<()> {
 
     assert_eq!(
         integration_status(
-            &ctx,
+            &mut ctx,
             guard.write_permission(),
             &c.created.id,
             feature_c_name.as_ref()
@@ -367,7 +370,7 @@ fn causes_workspace_conflict() -> anyhow::Result<()> {
     );
     assert_eq!(
         integration_status(
-            &ctx,
+            &mut ctx,
             guard.write_permission(),
             &c.created.id,
             feature_b_name.as_ref()
@@ -381,7 +384,7 @@ fn causes_workspace_conflict() -> anyhow::Result<()> {
     );
     assert_eq!(
         integration_status(
-            &ctx,
+            &mut ctx,
             guard.write_permission(),
             &c.created.id,
             feature_a_name.as_ref()

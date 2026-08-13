@@ -64,7 +64,7 @@ impl TryFrom<but_db::FetchStatus> for WorkspaceFetchStatus {
 /// reacts to updated remote refs. Within this process, overlapping fetch calls for the same
 /// repository serialize among themselves so concurrent `git fetch` runs cannot trip over Git's
 /// per-ref locks; fetches from other processes are not affected.
-#[but_api(napi)]
+#[but_api(napi, provides = [])]
 #[instrument(skip_all, err(Debug))]
 pub fn workspace_fetch_from_remotes(
     ctx: &mut but_ctx::Context,
@@ -180,7 +180,7 @@ pub(crate) fn prune_missing_branch_stack_order(ctx: &but_ctx::Context) -> anyhow
 ///
 /// A project that hasn't used the workspace fetch API returns an empty status. Legacy fetch state
 /// is intentionally not imported.
-#[but_api(napi)]
+#[but_api(napi, provides = [FetchStatus])]
 #[instrument(skip_all, err(Debug))]
 pub fn workspace_fetch_status(ctx: &but_ctx::Context) -> anyhow::Result<WorkspaceFetchStatus> {
     ctx.db
@@ -204,9 +204,9 @@ pub fn get_workspace(
     perm: &RepoShared,
 ) -> anyhow::Result<but_workspace::ui::workspace::DetailedGraphWorkspace> {
     let mut meta = ctx.meta()?;
-    let (repo, workspace, _) = ctx.workspace_and_db_with_perm(perm)?;
+    let (repo, workspace, mut db) = ctx.workspace_and_db_mut_with_perm(perm)?;
     let mut workspace = workspace.clone();
-    but_workspace::workspace::detailed_graph_workspace(&mut workspace, &mut meta, &repo)
+    but_workspace::workspace::detailed_graph_workspace(&mut workspace, &mut meta, &repo, &mut db)
         .map(Into::into)
 }
 
@@ -231,13 +231,6 @@ pub fn set_target_ref_and_init_project(
         but_workspace::init::set_target_ref_and_init_project(&repo, target_ref, push_remote)?;
     }
     ctx.invalidate_workspace_cache()?;
-    #[cfg(feature = "legacy")]
-    {
-        let mut guard = guard;
-        crate::legacy::meta::reconcile_in_workspace_state_of_vb_toml(ctx, guard.write_permission())
-            .ok();
-    }
-    #[cfg(not(feature = "legacy"))]
     drop(guard);
     Ok(())
 }
@@ -255,13 +248,6 @@ pub fn set_push_remote(ctx: &mut but_ctx::Context, push_remote: String) -> anyho
         but_workspace::init::set_push_remote(&repo, push_remote)?;
     }
     ctx.invalidate_workspace_cache()?;
-    #[cfg(feature = "legacy")]
-    {
-        let mut guard = guard;
-        crate::legacy::meta::reconcile_in_workspace_state_of_vb_toml(ctx, guard.write_permission())
-            .ok();
-    }
-    #[cfg(not(feature = "legacy"))]
     drop(guard);
     Ok(())
 }
@@ -408,11 +394,19 @@ fn review_integration_hints_from_reviews(
                     .iter()
                     .any(|sha| incoming_commit_ids.contains(sha))
         })
-        .filter_map(|review| gix::ObjectId::from_hex(review.sha.as_bytes()).ok())
-        .filter(|head_commit_at_merge| seen.insert(*head_commit_at_merge))
-        .map(|head_commit_at_merge| ReviewIntegrationHint {
-            head_commit_at_merge,
+        .filter_map(|review| {
+            Some((
+                gix::ObjectId::from_hex(review.sha.as_bytes()).ok()?,
+                review.source_branch,
+            ))
         })
+        .filter(|hint| seen.insert(hint.clone()))
+        .map(
+            |(head_commit_at_merge, source_branch)| ReviewIntegrationHint {
+                head_commit_at_merge,
+                source_branch,
+            },
+        )
         .collect()
 }
 
@@ -539,8 +533,8 @@ pub fn workspace_integrate_upstream_only_with_perm(
 ) -> anyhow::Result<WorkspaceIntegrateUpstreamOutcome> {
     let mut meta = ctx.meta()?;
     let (workspace_state, worktree_conflicts) = {
-        let (repo, mut ws, db) = ctx.workspace_mut_and_db_with_perm(perm)?;
         let project_meta = ctx.project_meta()?;
+        let (repo, mut ws, mut db) = ctx.workspace_mut_and_db_mut_with_perm(perm)?;
         let review_hints = match forge_review_integration_hints(&ws, &project_meta, &db) {
             Ok(review_hints) => review_hints,
             Err(err) => {
@@ -560,6 +554,7 @@ pub fn workspace_integrate_upstream_only_with_perm(
             &mut meta,
             project_meta,
             &repo,
+            &mut db,
             updates,
             &review_hints,
         )?;
@@ -568,7 +563,7 @@ pub fn workspace_integrate_upstream_only_with_perm(
         if dry_run.into() {
             let replaced_commits = rebase.history.commit_mappings();
             let workspace_state =
-                WorkspaceState::from_rebase_preview_with_db(&mut rebase, replaced_commits, &db)?;
+                WorkspaceState::from_rebase_preview(&mut rebase, replaced_commits)?;
             return Ok(WorkspaceIntegrateUpstreamOutcome {
                 workspace_state,
                 worktree_conflicts,
@@ -587,13 +582,7 @@ pub fn workspace_integrate_upstream_only_with_perm(
             materialized.meta.set_workspace(&md)?;
         }
 
-        let workspace_state = WorkspaceState::from_workspace_with_db(
-            materialized.workspace,
-            materialized.meta,
-            &repo,
-            materialized.history.commit_mappings(),
-            &db,
-        )?;
+        let workspace_state = WorkspaceState::from_materialized(materialized, &repo)?;
         (workspace_state, worktree_conflicts)
     };
     ctx.invalidate_workspace_cache()?;
@@ -851,6 +840,10 @@ mod tests {
             hints[0].head_commit_at_merge.to_hex().to_string(),
             "1234567890abcdef1234567890abcdef12345678",
             "the hint should use the review head SHA reported by the forge"
+        );
+        assert_eq!(
+            hints[0].source_branch, "feature",
+            "the hint should retain the review's source-branch association"
         );
     }
 
