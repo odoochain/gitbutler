@@ -49,6 +49,7 @@ pub(crate) fn open_that(target_url: &Url) -> anyhow::Result<()> {
         "windsurf",
         "cursor",
         "trae",
+        "trae-cn",
         "antigravity-ide",
         "file",
     ]
@@ -203,6 +204,7 @@ fn is_vscode_or_compatible(scheme: &str) -> bool {
             | "cursor"
             | "windsurf"
             | "trae"
+            | "trae-cn"
             | "antigravity-ide"
     )
 }
@@ -220,6 +222,7 @@ fn scheme_to_wsl_editor_command(scheme: &str) -> Option<&'static str> {
         "cursor" => Some("cursor"),
         "windsurf" => Some("windsurf"),
         "trae" => Some("trae"),
+        "trae-cn" => Some("trae-cn"),
         "antigravity-ide" => Some("antigravity-ide"),
         _ => {
             tracing::warn!(%scheme, "missing WSL editor scheme mapping");
@@ -279,6 +282,12 @@ mod wsl_tests {
                 ]
             ))
         );
+    }
+
+    #[test]
+    fn trae_cn_is_vscode_compatible_and_uses_trae_cn_cli() {
+        assert!(is_vscode_or_compatible("trae-cn"));
+        assert_eq!(scheme_to_wsl_editor_command("trae-cn"), Some("trae-cn"));
     }
 
     #[test]
