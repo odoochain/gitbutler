@@ -100,7 +100,7 @@ const imgSrc = [
 	"https://gitbutler-public.s3.amazonaws.com",
 ].join(" ");
 
-const liteProtocolScheme = "lite";
+const liteProtocolScheme = "but";
 const liteProtocolHost = "app";
 const contentRootURL = pathToFileURL(path.join(currentDirPath, "../ui"));
 const askpassExecutableName =
@@ -436,7 +436,86 @@ const registerIpcHandlers = (): void => {
 	);
 };
 
-const createMainWindow = async (): Promise<void> => {
+/**
+ * A `but://app/...` link, translated to whatever this build actually serves:
+ * the dev server in development, our own scheme when packaged. Returns null
+ * for anything that is not one of our links.
+ */
+const deepLinkTargetUrl = (link: string): string | null => {
+	const url = newUrlOrNull(link);
+	if (
+		url === null ||
+		url.protocol !== `${liteProtocolScheme}:` ||
+		url.host !== liteProtocolHost ||
+		url.pathname.includes("..")
+	)
+		return null;
+
+	const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+	const base = new URL(devServerUrl ?? `${liteProtocolScheme}://${liteProtocolHost}/`);
+	const target = new URL(`${url.pathname}${url.search}`, base);
+
+	// The path decides the host when it starts with `//`, so the link's own host
+	// having checked out says nothing about where this one points.
+	if (target.protocol !== base.protocol || target.host !== base.host) return null;
+
+	return target.href;
+};
+
+/**
+ * Sign in from a `but://login?access_token=…` link, which is how the login page
+ * hands the account back once it knows which client asked.
+ */
+const completeLogin = async (url: URL): Promise<boolean> => {
+	if (url.host !== "login") return false;
+
+	const accessToken = url.searchParams.get("access_token");
+	if (accessToken === null) return true;
+
+	try {
+		await sdk.loginAndPersist(accessToken);
+	} catch (error) {
+		// oxlint-disable-next-line no-console
+		console.error("Failed to sign in from a login link", error);
+	}
+	return true;
+};
+
+/**
+ * Open a deep link in the window we already have, or start one if the app was
+ * launched by the link. The project it names is checked by the route itself,
+ * which covers every other way a URL arrives too.
+ */
+const openDeepLink = async (link: string): Promise<void> => {
+	const url = newUrlOrNull(link);
+	if (url !== null && url.protocol === `${liteProtocolScheme}:` && (await completeLogin(url))) {
+		BrowserWindow.getAllWindows()[0]?.focus();
+		return;
+	}
+
+	const target = deepLinkTargetUrl(link);
+	if (target === null) {
+		// oxlint-disable-next-line no-console
+		console.error(`Ignored deep link ${link}`);
+		return;
+	}
+
+	const [existing] = BrowserWindow.getAllWindows();
+	if (!existing) {
+		await createMainWindow(target);
+		return;
+	}
+
+	if (existing.isMinimized()) existing.restore();
+	existing.focus();
+	await existing.loadURL(target);
+};
+
+/** The `but://` link in a launch argv, if the OS started us with one. */
+const deepLinkFromArgv = (argv: Array<string>): string | undefined =>
+	argv.find((arg) => arg.startsWith(`${liteProtocolScheme}://`));
+
+const createMainWindow = async (initialUrl?: string): Promise<void> => {
 	const icon = getWindowIcon();
 	const mainWindow = new BrowserWindow({
 		width: 1024,
@@ -462,17 +541,36 @@ const createMainWindow = async (): Promise<void> => {
 
 	const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 	if (devServerUrl !== undefined) {
-		await mainWindow.loadURL(devServerUrl);
+		await mainWindow.loadURL(initialUrl ?? devServerUrl);
 		return;
 	}
 
 	const rootUrl = `${liteProtocolScheme}://${liteProtocolHost}/`;
-	await mainWindow.loadURL(rootUrl);
+	await mainWindow.loadURL(initialUrl ?? rootUrl);
 	registerUpdater(mainWindow);
 	checkForUpdates();
 };
 
 app.enableSandbox(); // forces sandboxing for all renderers, even if they try to launch without
+
+// One instance owns the protocol: a second launch (how Windows and Linux
+// deliver a link) hands its argv to the first and exits.
+if (!app.requestSingleInstanceLock()) {
+	app.quit();
+} else {
+	app.on("second-instance", (_event, argv) => {
+		const link = deepLinkFromArgv(argv);
+		if (link !== undefined) void openDeepLink(link);
+	});
+
+	// macOS delivers links here instead, both to a running app and to one the
+	// link just launched.
+	app.on("open-url", (event, url) => {
+		event.preventDefault();
+		void openDeepLink(url);
+	});
+}
+
 void app.whenReady().then(async () => {
 	applyGUISettings(await readSettings());
 	await initApplicationNamespace(null);
@@ -560,7 +658,26 @@ void app.whenReady().then(async () => {
 	});
 
 	registerIpcHandlers();
-	await createMainWindow();
+
+	// Dev runs from the electron binary, which needs to be told which program
+	// and arguments to relaunch for a link.
+	if (app.isPackaged) {
+		app.setAsDefaultProtocolClient(liteProtocolScheme);
+	} else {
+		app.setAsDefaultProtocolClient(liteProtocolScheme, process.execPath, [
+			path.resolve(process.argv[1] ?? ""),
+		]);
+	}
+
+	const launchLink = deepLinkFromArgv(process.argv);
+	// Windows and Linux deliver a cold-launch link only through argv, never as
+	// `open-url`, so a login link arriving that way has to be handled here too.
+	const launchUrl = launchLink === undefined ? null : newUrlOrNull(launchLink);
+	if (launchUrl?.protocol === `${liteProtocolScheme}:`) await completeLogin(launchUrl);
+
+	await createMainWindow(
+		launchLink === undefined ? undefined : (deepLinkTargetUrl(launchLink) ?? undefined),
+	);
 
 	app.on("activate", () => {
 		if (BrowserWindow.getAllWindows().length === 0) void createMainWindow();
@@ -578,11 +695,10 @@ app.on("window-all-closed", () => {
 
 app.on("web-contents-created", (_, contents) => {
 	contents.on("will-navigate", (event, navigationUrl) => {
-		const currentUrl = newUrlOrNull(contents.getURL());
 		const targetUrl = newUrlOrNull(navigationUrl);
-		// Allow HMR page reloads.
-		if (!app.isPackaged && currentUrl?.href === targetUrl?.href && isTrustedLocalOrigin(targetUrl))
-			return;
+		// Where the user is lives in the URL, so opening a link to a branch or a
+		// commit is an ordinary navigation. Anything off our origin stays blocked.
+		if (isTrustedLocalOrigin(targetUrl)) return;
 
 		// oxlint-disable-next-line no-console
 		console.error(`Blocked navigation to ${navigationUrl}`);

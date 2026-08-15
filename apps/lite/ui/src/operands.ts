@@ -3,6 +3,10 @@ import type { HunkLineSelection } from "#ui/hunk.ts";
 
 export type Operand =
 	| { _tag: "UncommittedChanges" }
+	/**
+	 * Applied to the workspace: no operation can act on an unapplied branch, and
+	 * `operandLabel` asserts the ref resolves to a segment.
+	 */
 	| ({ _tag: "Branch" } & BranchOperand)
 	| ({ _tag: "Commit" } & CommitOperand)
 	| ({ _tag: "File" } & FileOperand)
@@ -37,7 +41,9 @@ export const uncommittedChangesOperand: Operand = {
 	_tag: "UncommittedChanges",
 };
 
-export const branchOperand = ({ branchRef }: BranchOperand): Operand => ({
+export const branchOperand = ({
+	branchRef,
+}: BranchOperand): Extract<Operand, { _tag: "Branch" }> => ({
 	_tag: "Branch",
 	branchRef,
 });
@@ -153,16 +159,6 @@ export const operandFileParent = (operand: Operand): FileParent | null =>
 		}),
 		Match.orElse(() => null),
 	);
-
-/**
- * The operands if they are all files under `fileParent`, none otherwise. Checking is confined to
- * one parent at a time, so a set that isn't wholly ours belongs to another list, and its paths
- * would resolve against the wrong parent.
- */
-export const filesUnder = (operands: Array<Operand>, fileParent: FileParent): Array<Operand> =>
-	operands.every((operand) => operand._tag === "File" && operandEquals(operand.parent, fileParent))
-		? operands
-		: [];
 
 export const operandContains = (a: Operand, b: Operand) => {
 	const bFileParent = operandFileParent(b);

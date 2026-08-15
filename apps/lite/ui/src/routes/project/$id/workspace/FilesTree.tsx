@@ -1,4 +1,5 @@
 import rowStyles from "./Row.module.css";
+import { enterAbsorb } from "#ui/use-cursor.ts";
 import {
 	guiSettingsQueryOptions,
 	headInfoQueryOptions,
@@ -37,12 +38,7 @@ import type { FileRowItem } from "./file-row.ts";
 import { parentDirectoryRow, type FileTreeRow } from "./file-tree.ts";
 import { useFileDisplayMode } from "./useFileDisplayMode.ts";
 import { checkedRange, navigationIndexRange } from "#ui/checking.ts";
-import {
-	useCommitUncommitChanges,
-	useDiscardFileChanges,
-	useOpenInProgram,
-} from "#ui/api/mutations.ts";
-import { createDiffSpec } from "#ui/operations/diff-specs.ts";
+import { useDiscardFileChanges, useOpenInProgram } from "#ui/api/mutations.ts";
 import type { TreeChange } from "@gitbutler/but-sdk";
 
 const useFilesTreeHotkeys = ({
@@ -53,6 +49,8 @@ const useFilesTreeHotkeys = ({
 	projectId,
 	ref,
 	fileParent,
+	canUncommit,
+	uncommit,
 	rows,
 	selection,
 	selectedRow,
@@ -66,6 +64,8 @@ const useFilesTreeHotkeys = ({
 	projectId: string;
 	ref: React.RefObject<HTMLElement | null>;
 	fileParent: FileParent;
+	canUncommit: boolean;
+	uncommit?: (change: TreeChange, extendToCheckedFiles: boolean) => void;
 	rows: Array<FileTreeRow<FileRowItem>>;
 	selection: string | null;
 	selectedRow: FileTreeRow<FileRowItem> | undefined;
@@ -82,12 +82,9 @@ const useFilesTreeHotkeys = ({
 		select: (cfg) => editors?.find((editor) => editor.id === cfg.editorId),
 	});
 	const { mutate: openInProgram } = useOpenInProgram();
-	const { isPending: isCommitUncommitChangesPending, mutate: commitUncommitChanges } =
-		useCommitUncommitChanges();
 	const { canDiscard, discard } = useDiscardFileChanges({ projectId, fileParent });
 
 	const store = useAppStore();
-	const dispatch = useAppDispatch();
 
 	const selectedChangesFile = fileParent._tag === "UncommittedChanges" ? selection : null;
 	const selectedUncommittedChange =
@@ -96,22 +93,19 @@ const useFilesTreeHotkeys = ({
 	const absorbSelectedFile = () => {
 		if (selectedUncommittedChange === null) return;
 
-		dispatch(
-			projectSlice.actions.enterAbsorbMode({
-				projectId,
-				source: fileOperand({
-					parent: uncommittedChangesFileParent,
-					path: selectedUncommittedChange.path,
-				}),
-				sourceTarget: {
-					type: "treeChanges",
-					subject: {
-						changes: [selectedUncommittedChange],
-						assignedStackId: null,
-					},
-				},
+		enterAbsorb({
+			source: fileOperand({
+				parent: uncommittedChangesFileParent,
+				path: selectedUncommittedChange.path,
 			}),
-		);
+			sourceTarget: {
+				type: "treeChanges",
+				subject: {
+					changes: [selectedUncommittedChange],
+					assignedStackId: null,
+				},
+			},
+		});
 		focusSelectionScope("outline");
 	};
 
@@ -135,13 +129,7 @@ const useFilesTreeHotkeys = ({
 	const uncommitSelectedFile = () => {
 		if (selectedChange === null || fileParent._tag !== "Commit") return;
 
-		commitUncommitChanges({
-			projectId,
-			commitId: fileParent.commitId,
-			assignTo: null,
-			changes: [createDiffSpec(selectedChange, [])],
-			dryRun: false,
-		});
+		uncommit?.(selectedChange, true);
 	};
 
 	/**
@@ -241,10 +229,7 @@ const useFilesTreeHotkeys = ({
 			options: {
 				conflictBehavior: "allow",
 				enabled:
-					isDefaultMode &&
-					selectedChange !== null &&
-					fileParent._tag === "Commit" &&
-					!isCommitUncommitChangesPending,
+					isDefaultMode && selectedChange !== null && fileParent._tag === "Commit" && canUncommit,
 				target: ref,
 				meta: changesFileHotkeys.uncommit.meta,
 			},
@@ -265,7 +250,6 @@ const useFilesTreeHotkeys = ({
 
 	useNavigationIndexHotkeys({
 		navigationIndex,
-		projectId,
 		group: "File",
 		select: onRowSelection,
 		selection,
@@ -287,6 +271,8 @@ export const FilesTree: FC<
 	{
 		projectId: string;
 		rows: Array<FileTreeRow<FileRowItem>>;
+		canUncommit: boolean;
+		uncommit?: (change: TreeChange, extendToCheckedFiles: boolean) => void;
 		collapsedDirectories: Record<string, true>;
 		onToggleDirectoryCollapsed: (path: string) => void;
 		selection: string | null;
@@ -301,6 +287,8 @@ export const FilesTree: FC<
 	} & ComponentProps<"div">
 > = ({
 	rows,
+	canUncommit,
+	uncommit,
 	collapsedDirectories,
 	onToggleDirectoryCollapsed,
 	selection,
@@ -458,6 +446,8 @@ export const FilesTree: FC<
 		projectId,
 		ref,
 		fileParent,
+		canUncommit,
+		uncommit,
 		rows,
 		selection,
 		selectedRow,
@@ -561,6 +551,8 @@ export const FilesTree: FC<
 												checkFile={checkFile}
 												projectId={projectId}
 												fileParent={fileParent}
+												canUncommit={canUncommit}
+												uncommit={uncommit}
 												selectionScope={selectionScope}
 												branchNameByCommitId={(commitId) =>
 													headInfoIndex?.commitContextByCommitId(commitId)?.segment.refName

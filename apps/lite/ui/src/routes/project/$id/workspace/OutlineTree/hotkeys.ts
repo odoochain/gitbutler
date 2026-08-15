@@ -8,6 +8,12 @@ import {
 	useWorkspaceBranchAndAncestorsPush,
 	useWorkspaceIntegrateUpstream,
 } from "#ui/api/mutations.ts";
+import {
+	setCursor,
+	startRenameBranch,
+	startRewordCommit,
+	useResolvedCursor,
+} from "#ui/use-cursor.ts";
 import { forgeInfoOptions, headInfoQueryOptions } from "#ui/api/queries.ts";
 import { decodeBytes } from "#ui/api/bytes.ts";
 import { getHeadInfoIndex } from "#ui/api/ref-info.ts";
@@ -84,9 +90,7 @@ export const useOutlineTreeHotkeys = ({
 	});
 	const { data: forgeInfo } = useQuery(forgeInfoOptions(projectId));
 	const store = useAppStore();
-	const selection = useAppSelector((state) =>
-		projectSlice.selectors.selectSelectionOutline(state, projectId, navigationIndex),
-	);
+	const selection = useResolvedCursor("stacks", navigationIndex);
 	const isDefaultMode = useAppSelector(
 		(state) => projectSlice.selectors.selectOutlineModeState(state, projectId)._tag === "Default",
 	);
@@ -187,14 +191,7 @@ export const useOutlineTreeHotkeys = ({
 			},
 			{
 				onSuccess: (response) => {
-					dispatch(
-						projectSlice.actions.selectOutline({
-							projectId,
-							selection: branchOperand({
-								branchRef: response.newRef.fullNameBytes,
-							}),
-						}),
-					);
+					setCursor("stacks", branchOperand({ branchRef: response.newRef.fullNameBytes }));
 				},
 			},
 		);
@@ -243,24 +240,36 @@ export const useOutlineTreeHotkeys = ({
 		const selectionIdx = navigationIndex.indexByKey.get(operandIdentityKey(source));
 		if (selectionIdx === undefined) return;
 
-		const nextItem = navigationIndex.items[selectionIdx + offset];
+		const checkedCommitIds = projectSlice.selectors.selectCheckedCommitIds(
+			store.getState(),
+			projectId,
+		);
+		const subjectCommitIds =
+			checkedCommitIds.size > 0 ? checkedCommitIds : new Set([selection.commitId]);
+
+		let nextItemIndex = selectionIdx;
+		let nextItem: Operand | undefined;
+		do {
+			nextItemIndex += offset;
+			nextItem = navigationIndex.items[nextItemIndex];
+		} while (nextItem?._tag === "Commit" && subjectCommitIds.has(nextItem.commitId));
 		if (!nextItem) return;
 
-		const relativeTo = Match.value(nextItem).pipe(
-			Match.tags({
-				Commit: ({ commitId }): RelativeTo => ({ type: "commit", subject: commitId }),
-				Branch: ({ branchRef }): RelativeTo => ({
-					type: "referenceBytes",
-					subject: branchRef,
-				}),
-			}),
-			Match.orElse(() => null),
-		);
-		if (!relativeTo) return;
+		let relativeTo: RelativeTo;
+		switch (nextItem._tag) {
+			case "Commit":
+				relativeTo = { type: "commit", subject: nextItem.commitId };
+				break;
+			case "Branch":
+				relativeTo = { type: "referenceBytes", subject: nextItem.branchRef };
+				break;
+			default:
+				throw new Error("Only commits and branches are valid outline items");
+		}
 
 		commitMove({
 			projectId,
-			subjectCommitIds: [selection.commitId],
+			subjectCommitIds: Array.from(subjectCommitIds),
 			relativeTo,
 			side: offset === -1 ? "above" : "below",
 			dryRun: false,
@@ -296,12 +305,7 @@ export const useOutlineTreeHotkeys = ({
 						});
 					}
 
-					dispatch(
-						projectSlice.actions.selectOutline({
-							projectId,
-							selection: latestSelectionAfterDiscard,
-						}),
-					);
+					setCursor("stacks", latestSelectionAfterDiscard);
 				},
 			},
 		);
@@ -332,10 +336,15 @@ export const useOutlineTreeHotkeys = ({
 	const uncommitSelectedCommit = () => {
 		if (!selection || selection._tag !== "Commit") return;
 
+		const checkedCommitIds = projectSlice.selectors.selectCheckedCommitIds(
+			store.getState(),
+			projectId,
+		);
 		commitUncommit({
 			projectId,
 			assignTo: null,
-			subjectCommitIds: [selection.commitId],
+			subjectCommitIds:
+				checkedCommitIds.size > 0 ? Array.from(checkedCommitIds) : [selection.commitId],
 			dryRun: false,
 		});
 	};
@@ -415,10 +424,8 @@ export const useOutlineTreeHotkeys = ({
 	useNavigationIndexHotkeys({
 		ref,
 		navigationIndex,
-		projectId,
 		group: "Outline",
-		select: (newItem) =>
-			dispatch(projectSlice.actions.selectOutline({ projectId, selection: newItem })),
+		select: (newItem) => setCursor("stacks", newItem),
 		selection,
 		onEdgeSpill,
 		getKey: operandIdentityKey,
@@ -455,7 +462,7 @@ export const useOutlineTreeHotkeys = ({
 					{
 						hotkey: outlineHotkeys.rewordCommit.hotkey,
 						callback: () => {
-							dispatch(projectSlice.actions.startRewordCommit({ projectId, commit: selection }));
+							startRewordCommit(selection);
 						},
 						options: {
 							conflictBehavior: "allow",
@@ -467,7 +474,7 @@ export const useOutlineTreeHotkeys = ({
 					{
 						hotkey: "F2",
 						callback: () => {
-							dispatch(projectSlice.actions.startRewordCommit({ projectId, commit: selection }));
+							startRewordCommit(selection);
 						},
 						options: {
 							conflictBehavior: "allow",
@@ -480,7 +487,7 @@ export const useOutlineTreeHotkeys = ({
 					{
 						hotkey: outlineHotkeys.renameBranch.hotkey,
 						callback: () => {
-							dispatch(projectSlice.actions.startRenameBranch({ projectId, branch: selection }));
+							startRenameBranch(selection);
 						},
 						options: {
 							conflictBehavior: "allow",
@@ -492,7 +499,7 @@ export const useOutlineTreeHotkeys = ({
 					{
 						hotkey: "F2",
 						callback: () => {
-							dispatch(projectSlice.actions.startRenameBranch({ projectId, branch: selection }));
+							startRenameBranch(selection);
 						},
 						options: {
 							conflictBehavior: "allow",

@@ -1,4 +1,5 @@
 import { decodeBytes, encodeBytes } from "#ui/api/bytes.ts";
+import { remapSearchBranch, remapSearchCommits, setCursor } from "#ui/use-cursor.ts";
 import { getHeadInfoIndex } from "#ui/api/ref-info.ts";
 import {
 	currentForgeLoginQueryOptions,
@@ -8,17 +9,24 @@ import {
 	listCommentReactionsQueryOptions,
 	listReviewCommentsQueryOptions,
 	listReviewReactionsQueryOptions,
+	treeChangeDiffsQueryOptions,
 	workspaceFetchQueryOptions,
 } from "#ui/api/queries.ts";
 import { shortCommitId } from "#ui/commit.ts";
+import {
+	buildCommitMessagePrompt,
+	COMMIT_MESSAGE_SYSTEM_PROMPT,
+	streamCommitMessage,
+} from "#ui/commit-message-generation.ts";
 import { errorMessageForToast } from "#ui/errors.ts";
 import { createDiffSpec, resolveDiffSpecs } from "#ui/operations/diff-specs.ts";
 import {
 	discardChangesToastOptions,
 	rejectedChangesToastOptions,
 } from "#ui/operations/toastOptions.tsx";
-import { commitOperand, filesUnder, type FileParent } from "#ui/operands.ts";
+import { commitOperand, operandEquals, type FileParent } from "#ui/operands.ts";
 import { projectSlice } from "#ui/projects/state.ts";
+import { projectAiSettingsQueryOptions } from "#ui/project-ai-settings.ts";
 import { type AppDispatch, useAppDispatch, useAppStore } from "#ui/store.ts";
 import { formatRelativeTime } from "#ui/time.ts";
 import { Toast } from "@base-ui/react";
@@ -55,6 +63,39 @@ const pluralRules = new Intl.PluralRules("en");
 type PromiseReturnType<T> = T extends (...args: Array<any>) => Promise<infer U> ? U : never;
 type AnyResponse = PromiseReturnType<(typeof window.lite)[keyof typeof window.lite]>;
 
+type GenerateCommitMessageInput = {
+	projectId: string;
+	changes: Array<TreeChange>;
+	previousMessage: string;
+	onValue: (value: string) => void;
+};
+
+/** Loads selected patches and streams a generated commit message to the caller. */
+export const useGenerateCommitMessage = () => {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async (input: GenerateCommitMessageInput) => {
+			const [settings, patches] = await Promise.all([
+				queryClient.ensureQueryData(projectAiSettingsQueryOptions(input.projectId)),
+				Promise.all(
+					input.changes.map((change) =>
+						queryClient.ensureQueryData(
+							treeChangeDiffsQueryOptions({ projectId: input.projectId, change }),
+						),
+					),
+				),
+			]);
+			const prompt = buildCommitMessagePrompt(settings.commitMessagePrompt, input.changes, patches);
+			return streamCommitMessage(
+				(onToken) => window.lite.streamAiResponse(COMMIT_MESSAGE_SYSTEM_PROMPT, prompt, onToken),
+				input.onValue,
+				input.previousMessage,
+			);
+		},
+		meta: { failureTitle: "Failed to generate commit message" },
+	});
+};
+
 export const syncCoreCaches = (
 	queryClient: QueryClient,
 	dispatch: AppDispatch,
@@ -78,6 +119,8 @@ export const syncCoreCaches = (
 			replacedCommits: workspace.replacedCommits,
 		}),
 	);
+	// Same tick as the headInfo push, so a `commit:` URL param never dangles.
+	remapSearchCommits(workspace.replacedCommits);
 };
 
 export const useAbsorb = ({ projectId }: { projectId: string }) =>
@@ -625,13 +668,11 @@ export const useCommitCreate = () => {
 				const newCommitCtx = headInfoIndex.commitContextByCommitId(response.newCommit);
 
 				if (newCommitCtx) {
-					dispatch(
-						projectSlice.actions.selectOutline({
-							projectId: input.projectId,
-							selection: commitOperand({
-								commitId: response.newCommit,
-								changeId: newCommitCtx.commit.changeId,
-							}),
+					setCursor(
+						"stacks",
+						commitOperand({
+							commitId: response.newCommit,
+							changeId: newCommitCtx.commit.changeId,
 						}),
 					);
 				}
@@ -734,19 +775,19 @@ export const useDiscardFileChanges = ({
 		change: TreeChange;
 		extendToCheckedFiles: boolean;
 	}): Promise<void> => {
-		// A checked set belonging to another list says nothing about this file, so the subject then
-		// stands alone, as it does when nothing is checked at all.
-		const checkedFiles = extendToCheckedFiles
-			? filesUnder(
-					projectSlice.selectors.selectCheckedOperands(store.getState(), projectId),
-					fileParent,
-				)
-			: [];
-		if (checkedFiles.length === 0) return runDiscard([createDiffSpec(change, [])]);
+		const sources = projectSlice.selectors.selectCheckedOperands(store.getState(), projectId);
+
+		const areAllFilesUnder = () =>
+			sources.every(
+				(operand) => operand._tag === "File" && operandEquals(operand.parent, fileParent),
+			);
+
+		if (!extendToCheckedFiles || sources.length === 0 || !areAllFilesUnder())
+			return runDiscard([createDiffSpec(change, [])]);
 
 		// Checked files carry only paths, so their changes have to be looked up.
 		try {
-			const changes = await resolveDiffSpecs({ projectId, queryClient, sources: checkedFiles });
+			const changes = await resolveDiffSpecs({ projectId, queryClient, sources });
 			// One of them gone stale fails resolution for the whole set — the reconciler is about to
 			// uncheck it — and discarding the subject instead is not what was asked for.
 			if (changes) runDiscard(changes);
@@ -777,13 +818,11 @@ export const useCommitInsertBlank = () => {
 			const newCommitCtx = headInfoIndex.commitContextByCommitId(response.newCommit);
 
 			if (newCommitCtx) {
-				dispatch(
-					projectSlice.actions.selectOutline({
-						projectId: input.projectId,
-						selection: commitOperand({
-							commitId: response.newCommit,
-							changeId: newCommitCtx.commit.changeId,
-						}),
+				setCursor(
+					"stacks",
+					commitOperand({
+						commitId: response.newCommit,
+						changeId: newCommitCtx.commit.changeId,
 					}),
 				);
 			}
@@ -1009,6 +1048,7 @@ export const useBranchRename = () => {
 					},
 				}),
 			);
+			remapSearchBranch(decodeBytes(input.refName), decodeBytes(response.newRef.fullNameBytes));
 
 			await moveDraftPR({
 				queryClient: mutation.client,
