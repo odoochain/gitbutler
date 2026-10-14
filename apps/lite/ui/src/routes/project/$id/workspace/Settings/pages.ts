@@ -1,4 +1,4 @@
-import type { IconName } from "#ui/components/iconNames.ts";
+import type { IconName } from "@gitbutler/ui-react/iconNames.ts";
 
 /** What a page configures: the application, or the project it was opened over. */
 type SettingsScope = "global" | "project";
@@ -31,7 +31,7 @@ export const settingsPages = [
 	{ key: "project:project", label: "Project", icon: "mixer" },
 	{ key: "project:ai", label: "AI", icon: "ai" },
 	{ key: "project:git", label: "Git", icon: "pr" },
-	{ key: "project:worktrees", label: "Worktrees", icon: "globe" },
+	{ key: "project:worktrees", label: "Worktrees", icon: "folder-tree" },
 	{ key: "project:experimental", label: "Experimental", icon: "lab" },
 ] as const satisfies ReadonlyArray<SettingsPage>;
 

@@ -1,4 +1,6 @@
-import { classes } from "#ui/components/classes.ts";
+import { classes } from "@gitbutler/ui-react/classes.ts";
+import { Icon } from "@gitbutler/ui-react/Icon.tsx";
+import type { IconName } from "@gitbutler/ui-react/iconNames.ts";
 import styles from "./Section.module.css";
 import type { FC, ReactNode } from "react";
 
@@ -28,6 +30,8 @@ export const Section: FC<SectionProps> = (p) => (
 
 type RowProps = {
 	label: string;
+	/** Leads the row, ahead of the words: a drawing saying what the setting is about. */
+	leading?: ReactNode;
 	/** Places the control below the label and hint, spanning the row. */
 	stacked?: boolean;
 	/** Ties the label to a native control. Composite widgets pass `labelId` instead. */
@@ -36,6 +40,12 @@ type RowProps = {
 	labelId?: string;
 	/** Sits under the label: a unit, an inferred value, a caveat. */
 	hint?: ReactNode;
+	/**
+	 * The control takes the width and the label keeps the 150px the library gives it, with the
+	 * label on the control's first line rather than centred beside it. For a field with a note
+	 * under it, or a textarea: controls taller than a line, that want the room.
+	 */
+	wide?: boolean;
 	/**
 	 * Sits under the hint, flush with the words rather than at the row's end: a button that does
 	 * once what the control at the end does on its own.
@@ -55,11 +65,14 @@ export const Row: FC<RowProps> = (p) => (
 		className={classes(
 			styles.row,
 			p.stacked && styles.stacked,
+			p.wide && styles.wide,
 			// A row that is one line of text centres its control on that line; one with a hint
 			// keeps the control up against the label, which is what it belongs to.
-			p.hint === undefined && styles.centered,
+			p.hint === undefined && p.wide !== true && styles.centered,
 		)}
 	>
+		{p.leading !== undefined && <div className={styles.leading}>{p.leading}</div>}
+
 		<div className={styles.text}>
 			{p.htmlFor === undefined ? (
 				<span id={p.labelId} className={classes("text-15", "text-semibold", styles.label)}>
@@ -80,4 +93,12 @@ export const Row: FC<RowProps> = (p) => (
 
 		<div className={styles.control}>{p.children}</div>
 	</div>
+);
+
+/** A card with nothing to set: a glyph saying what kind of note it is, then the line itself. */
+export const Note: FC<{ icon: IconName; children: ReactNode }> = (p) => (
+	<p className={classes("text-12", styles.note)}>
+		<Icon name={p.icon} className={styles.noteIcon} />
+		<span>{p.children}</span>
+	</p>
 );

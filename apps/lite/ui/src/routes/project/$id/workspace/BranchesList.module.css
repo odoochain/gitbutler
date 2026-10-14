@@ -32,10 +32,13 @@
    line dividing the list from whatever heads it lives here rather than on the
    header, so it holds while the filter row stands in for that header. */
 .list {
-	display: flex;
 	flex-grow: 1;
-	flex-direction: column;
 	border-block-start: 1px solid var(--border-section);
+}
+
+.listViewport {
+	display: flex;
+	flex-direction: column;
 }
 
 /* The tree holds only stack groups, so the heading and empty-state message
@@ -77,7 +80,7 @@
    it: `safe` so a short list falls back to the top instead of putting the
    block's head out of reach above the scroll origin, and a size container so
    the block can scale its counterweight to the room it actually has. */
-.list[data-empty="true"] {
+.listViewportEmpty {
 	container-type: size;
 
 	justify-content: safe center;
@@ -92,21 +95,9 @@
 	line-height: 18px;
 }
 
-/* Only the number is the link; the arrow hangs off it without a space so the
-   underline stops at the number. Mirrors the pull request panel's link. */
+/* Only the number is the link; the author text beside it is what truncates. */
 .reviewLink {
-	display: inline-flex;
 	flex-shrink: 0;
-	align-items: center;
-	color: var(--text-2);
-	text-decoration: underline;
-	text-decoration-color: color-mix(in srgb, currentcolor 40%, transparent);
-	text-underline-position: from-font;
-
-	&:hover {
-		color: var(--text-1);
-		text-decoration-color: currentcolor;
-	}
 }
 
 .reviewAuthor {

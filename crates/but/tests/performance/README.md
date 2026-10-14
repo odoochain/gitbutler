@@ -24,6 +24,10 @@ BUT_BIN=/absolute/path/to/but PERF_BINARY_COMMIT=<full-commit-sha> \
 PERF_CHANNEL=nightly PERF_WARMUP=0 PERF_RUNS=1 \
 ./crates/but/tests/performance/run.sh status-many-uncommitted-changes
 
+# Run a scenario with but's agent detection enabled
+PERF_AI_AGENT=test-agent PERF_CHANNEL=nightly \
+./crates/but/tests/performance/run.sh status-many-uncommitted-changes
+
 # Show but output during smoke and measured runs for debugging
 PERF_CHANNEL=nightly PERF_SHOW_OUTPUT=1 PERF_WARMUP=0 PERF_RUNS=1 \
 ./crates/but/tests/performance/run.sh status-many-uncommitted-changes
@@ -44,6 +48,10 @@ PERF_UPLOAD_URL=https://tests.but.dev PERF_UPLOAD_TOKEN="$TOKEN" \
 
 `PERF_SHOW_OUTPUT=1` disables normal output suppression. Use for debugging only:
 terminal rendering affects timings, so do not compare with output-suppressed runs.
+
+`PERF_AI_AGENT` explicitly sets internal `AI_AGENT` for setup, smoke tests, measured
+runs, and profiling. Set `PERF_AI_AGENT=test-agent` to exercise `but`'s agent-specific
+behavior; leave it unset for the default environment.
 
 Supplied `BUT_BIN` requires `PERF_BINARY_COMMIT` (full binary commit SHA).
 Downloaded binaries supply it automatically.
@@ -256,6 +264,8 @@ symbolization troubleshooting (including lld/mold's `--no-rosegment` requirement
 - `status-large-uncommitted-file`: time `but status` with one untracked 400 MiB random binary file.
 - `status-many-uncommitted-changes`: time `but status` after directly modifying 240 tracked Rust files with `core.autocrlf=input`.
 - `status-many-uncommitted-changes-fragmented-odb`: same status workload with 200 additional small local packs. Reproduces [the null-ID object database rescan fixed by GitButler PR #15746](https://github.com/gitbutlerapp/gitbutler/pull/15746): with automatic text conversion enabled, each changed worktree file could trigger a guaranteed-miss null-ID lookup and rescan every pack.
+- `worktree-new`: time `but worktree new` in a clean GitButler workspace.
+- `tui-startup`: time full first-render cycle (startup, render, shutdown etc) of the TUI in a clean GitButler workspace.
 
 ## Measurement and fixture rules
 
